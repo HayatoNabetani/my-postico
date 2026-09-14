@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SchemaInfo, TableInfo, TableRowUpdate } from "../types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, TableInfo, TableRowUpdate } from "../types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -44,4 +44,12 @@ export function loadSavedFilters(): SavedFilter[] {
 
 export function persistSavedFilters(filters: SavedFilter[]): void {
   localStorage.setItem("my-postico-filters", JSON.stringify(filters));
+}
+
+export function loadSavedQueries(): SavedQuery[] {
+  return JSON.parse(localStorage.getItem("my-postico-queries") ?? "[]");
+}
+
+export function persistSavedQueries(queries: SavedQuery[]): void {
+  localStorage.setItem("my-postico-queries", JSON.stringify(queries));
 }

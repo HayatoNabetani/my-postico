@@ -1,10 +1,10 @@
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from "react";
-import { ChevronsLeft, Circle, Database, FileCode2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Server, Settings, Shield, Table2, Trash2, Unplug } from "lucide-react";
+import { ChevronsLeft, Circle, Database, FileCode2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Save, Server, Settings, Shield, Table2, Trash2, Unplug } from "lucide-react";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { DataGrid } from "./components/DataGrid";
 import { emptyFilter, FilterBuilder, newCondition } from "./components/FilterBuilder";
 import * as api from "./lib/api";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SchemaInfo, TableInfo } from "./types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, TableInfo } from "./types";
 
 type DialogState = { open: false } | { open: true; profile?: ConnectionProfile };
 type PendingHostKey = { profile: ConnectionProfile; fingerprint: string };
@@ -35,6 +35,8 @@ export default function App() {
   const [filter, setFilter] = useState<FilterGroup>(emptyFilter());
   const [appliedFilter, setAppliedFilter] = useState<FilterGroup>(emptyFilter());
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(api.loadSavedFilters());
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(api.loadSavedQueries());
+  const [selectedQueryId, setSelectedQueryId] = useState("");
   const [dialog, setDialog] = useState<DialogState>({ open: false });
   const [pendingHostKey, setPendingHostKey] = useState<PendingHostKey>();
   const [loading, setLoading] = useState(false);
@@ -152,6 +154,21 @@ export default function App() {
     finally { setLoading(false); }
   }
 
+  function saveQuery() {
+    const existing = savedQueries.find((item) => item.id === selectedQueryId);
+    const name = existing?.name ?? prompt("クエリー名")?.trim();
+    if (!name) return;
+    const item: SavedQuery = {id: existing?.id ?? crypto.randomUUID(), name, sql, updatedAt: new Date().toISOString()};
+    const next = [...savedQueries.filter((query) => query.id !== item.id), item].sort((a, b) => a.name.localeCompare(b.name, "ja"));
+    setSavedQueries(next); setSelectedQueryId(item.id); api.persistSavedQueries(next); setStatus(`${name} を保存しました`);
+  }
+
+  function deleteQuery() {
+    if (!selectedQueryId) return;
+    const next = savedQueries.filter((item) => item.id !== selectedQueryId);
+    setSavedQueries(next); setSelectedQueryId(""); api.persistSavedQueries(next);
+  }
+
   function beginHorizontalResize(event: ReactPointerEvent<HTMLDivElement>, current: number, update: (value: number) => void, min: number, max: number) {
     event.preventDefault();
     const startX = event.clientX;
@@ -216,7 +233,7 @@ export default function App() {
       <header className="topbar" data-tauri-drag-region><div className="breadcrumbs" data-tauri-drag-region><Database size={14}/><span data-tauri-drag-region>{active?.name ?? "No connection"}</span>{selectedTable && <><b data-tauri-drag-region>/</b><span data-tauri-drag-region>{selectedTable.schema}</span><b data-tauri-drag-region>/</b><strong data-tauri-drag-region>{selectedTable.name}</strong></>}</div><div className="status-cluster">{active?.readOnly && <span className="readonly"><Shield size={12}/>READ ONLY</span>}<span className={connected ? "online" : "offline"}><Circle size={8} fill="currentColor"/>{status}</span>{connected && <button className="icon-button" title="切断" onClick={() => void disconnect()}><Unplug size={15}/></button>}</div></header>
       <div className="tabbar">{selectedTable && <button className={!sqlOpen ? "active" : ""} onClick={() => setSqlOpen(false)}><Table2 size={14}/>{selectedTable.name}</button>}<button className={sqlOpen ? "active" : ""} onClick={() => setSqlOpen(true)}><FileCode2 size={14}/>SQL Query</button><button className="tab-more"><MoreHorizontal size={16}/></button></div>
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
-      {sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || loading} onClick={() => void runSql()}><Play size={13}/>{loading ? "実行中" : "実行"}</button></div><textarea spellCheck={false} value={sql} onChange={(e) => setSql(e.target.value)}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={page} loading={loading} onQuickFilter={() => undefined}/></div> : <>
+      {sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || loading} onClick={() => void runSql()}><Play size={13}/>{loading ? "実行中" : "実行"}</button><div className="query-actions"><select value={selectedQueryId} onChange={(event) => { const id = event.target.value; setSelectedQueryId(id); const selected = savedQueries.find((item) => item.id === id); if (selected) setSql(selected.sql); }}><option value="">保存済みクエリー</option>{savedQueries.map((query) => <option value={query.id} key={query.id}>{query.name}</option>)}</select><button onClick={saveQuery}><Save size={13}/>{selectedQueryId ? "上書き保存" : "名前を付けて保存"}</button><button className="mini-icon danger" disabled={!selectedQueryId} title="保存済みクエリーを削除" onClick={deleteQuery}><Trash2 size={13}/></button></div></div><textarea spellCheck={false} value={sql} onChange={(e) => setSql(e.target.value)}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={page} loading={loading} onQuickFilter={() => undefined}/></div> : <>
         {selectedTable && <FilterBuilder root={filter} columns={columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} onChange={setFilter} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); if (next.children[0]?.kind === "condition") next.children[0].column = columns[0]?.name ?? ""; setFilter(next); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => {setFilter(item.root); void applyFilter(item.root);}} onDeleteSaved={deleteSavedFilter}/>} 
         <DataGrid page={page} columns={columns} loading={loading} offset={offset} onPrevious={() => void applyFilter(appliedFilter, Math.max(0, offset - 100))} onNext={() => void applyFilter(appliedFilter, offset + 100)} onQuickFilter={quickFilter} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
       </>}

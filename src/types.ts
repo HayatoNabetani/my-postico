@@ -89,3 +89,10 @@ export interface SavedFilter {
   name: string;
   root: FilterGroup;
 }
+
+export interface SavedQuery {
+  id: string;
+  name: string;
+  sql: string;
+  updatedAt: string;
+}
