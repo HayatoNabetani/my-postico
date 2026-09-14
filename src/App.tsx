@@ -54,6 +54,7 @@ export default function App() {
   const [sqlPage, setSqlPage] = useState<QueryPage>();
   const [objectSearch, setObjectSearch] = useState("");
   const objectSearchRef = useRef<HTMLInputElement>(null);
+  const [filterFocusRequest, setFilterFocusRequest] = useState(0);
   const [connectionWidth, setConnectionWidth] = useState(() => savedSize("my-postico:connection-width", DEFAULT_CONNECTION_WIDTH));
   const [objectWidth, setObjectWidth] = useState(() => savedSize("my-postico:object-width", DEFAULT_OBJECT_WIDTH));
   const [sqlEditorHeight, setSqlEditorHeight] = useState(() => savedSize("my-postico:sql-editor-height", DEFAULT_SQL_EDITOR_HEIGHT));
@@ -67,13 +68,14 @@ export default function App() {
   useEffect(() => { localStorage.setItem("my-postico:object-width", String(objectWidth)); }, [objectWidth]);
   useEffect(() => { localStorage.setItem("my-postico:sql-editor-height", String(sqlEditorHeight)); }, [sqlEditorHeight]);
   useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f" || !connected) return;
-      event.preventDefault(); objectSearchRef.current?.focus(); objectSearchRef.current?.select();
+    const focusFilter = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f" || !activeTab || sqlOpen) return;
+      event.preventDefault();
+      setFilterFocusRequest((current) => current + 1);
     };
-    window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
-  }, [connected]);
+    window.addEventListener("keydown", focusFilter);
+    return () => window.removeEventListener("keydown", focusFilter);
+  }, [activeTab, sqlOpen]);
 
   function patchTab(id: string, patch: Partial<TableTab>) {
     setTableTabs((current) => current.map((tab) => tab.id === id ? {...tab, ...patch} : tab));
@@ -270,7 +272,7 @@ export default function App() {
 
     <aside className="object-sidebar">
       <header data-tauri-drag-region><div data-tauri-drag-region><Server size={16}/><strong data-tauri-drag-region>{active?.database ?? "Database"}</strong></div><button disabled={!connected} onClick={() => active && void connect(active)}><RefreshCw size={14}/></button></header>
-      <div className="object-search"><Search size={13}/><input ref={objectSearchRef} disabled={!connected} value={objectSearch} onChange={(event) => setObjectSearch(event.target.value)} placeholder="テーブルを検索  ⌘F" aria-label="スキーマ、テーブル、ビューを検索"/>{objectSearch && <button title="検索をクリア" onClick={() => { setObjectSearch(""); objectSearchRef.current?.focus(); }}><X size={12}/></button>}</div>
+      <div className="object-search"><Search size={13}/><input ref={objectSearchRef} disabled={!connected} value={objectSearch} onChange={(event) => setObjectSearch(event.target.value)} placeholder="テーブルを検索" aria-label="スキーマ、テーブル、ビューを検索"/>{objectSearch && <button title="検索をクリア" onClick={() => { setObjectSearch(""); objectSearchRef.current?.focus(); }}><X size={12}/></button>}</div>
       {!connected ? <div className="sidebar-empty">接続するとスキーマが<br/>ここに表示されます</div> : <div className="schema-tree">{schemas.map((schema) => {
         const query = objectSearch.trim().toLocaleLowerCase();
         const matchesSchema = schema.name.toLocaleLowerCase().includes(query);
@@ -287,7 +289,7 @@ export default function App() {
       <div className="tabbar"><div className="table-tabs">{tableTabs.map((tab) => <div className={`table-tab ${!sqlOpen && tab.id === activeTableTabId ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveTableTabId(tab.id); setSqlOpen(false); }}><Table2 size={14}/><span>{tab.table.name}</span>{Object.keys(tab.drafts).length > 0 && <i title="未反映の変更あり"/>}</button><button className="tab-close" title="タブを閉じる" onClick={() => closeTableTab(tab.id)}><X size={12}/></button></div>)}</div><button className={sqlOpen ? "active sql-tab" : "sql-tab"} onClick={() => setSqlOpen(true)}><FileCode2 size={14}/>SQL Query</button><button className="tab-more"><MoreHorizontal size={16}/></button></div>
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
       {sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || loading} onClick={() => void runSql()}><Play size={13}/>{loading ? "実行中" : "実行"}</button><div className="query-actions"><select value={selectedQueryId} onChange={(event) => { const id = event.target.value; setSelectedQueryId(id); const selected = savedQueries.find((item) => item.id === id); if (selected) setSql(selected.sql); }}><option value="">保存済みクエリー</option>{savedQueries.map((query) => <option value={query.id} key={query.id}>{query.name}</option>)}</select><button onClick={saveQuery}><Save size={13}/>{selectedQueryId ? "上書き保存" : "名前を付けて保存"}</button><button className="mini-icon danger" disabled={!selectedQueryId} title="保存済みクエリーを削除" onClick={deleteQuery}><Trash2 size={13}/></button></div></div><textarea spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={loading} onQuickFilter={() => undefined}/></div> : activeTab ? <>
-        <FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/>
+        <FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/>
         <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
       </> : <div className="empty-state"><Table2 size={36}/><p>左側からテーブルを選択してください</p></div>}
     </main>

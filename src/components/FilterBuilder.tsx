@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Brackets, ChevronDown, Copy, Filter, Plus, Save, Trash2, X } from "lucide-react";
 import type { ColumnInfo, FilterCondition, FilterGroup, FilterOperator, SavedFilter } from "../types";
 
@@ -27,6 +28,7 @@ interface Props {
   columns: ColumnInfo[];
   saved: SavedFilter[];
   loading: boolean;
+  focusRequest?: number;
   onChange: (value: FilterGroup) => void;
   onApply: () => void;
   onClear: () => void;
@@ -47,6 +49,24 @@ function updateGroup(root: FilterGroup, id: string, transform: (group: FilterGro
 }
 
 export function FilterBuilder(props: Props) {
+  const panelRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!props.focusRequest) return;
+    const focusFirstField = () => {
+      const field = panelRef.current?.querySelector<HTMLInputElement>(".condition-row input:not([type=checkbox])")
+        ?? panelRef.current?.querySelector<HTMLSelectElement>(".condition-row select");
+      field?.focus();
+      if (field instanceof HTMLInputElement) field.select();
+    };
+    if (props.root.children.length === 0) {
+      props.onChange({...props.root, children: [newCondition(props.columns[0]?.name)]});
+      requestAnimationFrame(() => requestAnimationFrame(focusFirstField));
+    } else {
+      focusFirstField();
+    }
+  }, [props.focusRequest]);
+
   const renderGroup = (group: FilterGroup, depth = 0): React.ReactNode => <div className={`filter-group depth-${Math.min(depth, 2)}`} key={group.id}>
     <div className="group-rail">
       <button className="conjunction" onClick={() => props.onChange(updateGroup(props.root, group.id, (g) => ({...g, conjunction: g.conjunction === "and" ? "or" : "and"})))}>{group.conjunction.toUpperCase()} <ChevronDown size={12}/></button>
@@ -69,8 +89,8 @@ export function FilterBuilder(props: Props) {
     </div>
   </div>;
 
-  return <section className="filter-panel">
-    <header className="filter-header"><div><Filter size={16}/><strong>Filter</strong><span className="count-badge">{props.root.children.length}</span></div><div className="filter-tools">
+  return <section className="filter-panel" ref={panelRef}>
+    <header className="filter-header"><div><Filter size={16}/><strong>Filter</strong><kbd>⌘F</kbd><span className="count-badge">{props.root.children.length}</span></div><div className="filter-tools">
       {props.saved.length > 0 && <select defaultValue="" onChange={(e) => { const match = props.saved.find((item) => item.id === e.target.value); if (match) props.onLoad(match); }}><option value="">保存済みフィルター</option>{props.saved.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
       <button onClick={props.onSave}><Save size={14}/>保存</button><button onClick={props.onClear}>クリア</button><button className="primary compact" disabled={props.loading} onClick={props.onApply}>{props.loading ? "適用中…" : "適用"}</button>
     </div></header>

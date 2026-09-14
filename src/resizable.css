@@ -84,6 +84,15 @@ body,
   cursor: pointer;
 }
 
+.filter-header kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #111318;
+  color: #777e89;
+  font: 9px/1.4 "SFMono-Regular", Consolas, monospace;
+}
+
 .grid-wrap {
   min-width: 0;
   min-height: 0;
