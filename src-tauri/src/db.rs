@@ -1,4 +1,4 @@
-use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, QueryPage, SchemaInfo, TableInfo}, ssh::SshTunnel, store};
+use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, TableInfo}, ssh::SshTunnel, store};
 use native_tls::TlsConnector;
 use postgres::{Client, Config, NoTls, config::SslMode, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
@@ -72,13 +72,40 @@ pub fn columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
           JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
           WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = c.table_schema
             AND tc.table_name = c.table_name AND kcu.column_name = c.column_name
-        )
+        ), fk.foreign_schema, fk.foreign_table, fk.foreign_column
       FROM information_schema.columns c
+      LEFT JOIN LATERAL (
+        SELECT ref_ns.nspname AS foreign_schema,
+               ref_rel.relname AS foreign_table,
+               ref_att.attname AS foreign_column
+        FROM pg_catalog.pg_constraint con
+        JOIN pg_catalog.pg_class src_rel ON src_rel.oid = con.conrelid
+        JOIN pg_catalog.pg_namespace src_ns ON src_ns.oid = src_rel.relnamespace
+        JOIN LATERAL generate_subscripts(con.conkey, 1) AS key_pos(position) ON TRUE
+        JOIN pg_catalog.pg_attribute src_att
+          ON src_att.attrelid = con.conrelid
+         AND src_att.attnum = con.conkey[key_pos.position]
+        JOIN pg_catalog.pg_class ref_rel ON ref_rel.oid = con.confrelid
+        JOIN pg_catalog.pg_namespace ref_ns ON ref_ns.oid = ref_rel.relnamespace
+        JOIN pg_catalog.pg_attribute ref_att
+          ON ref_att.attrelid = con.confrelid
+         AND ref_att.attnum = con.confkey[key_pos.position]
+        WHERE con.contype = 'f'
+          AND src_ns.nspname = c.table_schema
+          AND src_rel.relname = c.table_name
+          AND src_att.attname = c.column_name
+        ORDER BY ref_ns.nspname, ref_rel.relname, ref_att.attname
+        LIMIT 1
+      ) fk ON TRUE
       WHERE c.table_schema = $1 AND c.table_name = $2
       ORDER BY c.ordinal_position
     "#;
     client.query(sql, &[&schema, &table]).map_err(|e| e.to_string()).map(|rows| rows.into_iter().map(|row| ColumnInfo {
         name: row.get(0), data_type: row.get(1), nullable: row.get(2), primary_key: row.get(3),
+        foreign_key: match (row.get::<_, Option<String>>(4), row.get::<_, Option<String>>(5), row.get::<_, Option<String>>(6)) {
+            (Some(schema), Some(table), Some(column)) => Some(ForeignKeyInfo { schema, table, column }),
+            _ => None,
+        },
     }).collect())
 }
 

@@ -38,6 +38,11 @@ export interface ColumnInfo {
   dataType: string;
   nullable: boolean;
   primaryKey: boolean;
+  foreignKey?: {
+    schema: string;
+    table: string;
+    column: string;
+  };
 }
 
 export type FilterOperator =

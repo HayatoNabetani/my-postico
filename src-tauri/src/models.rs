@@ -45,11 +45,20 @@ pub struct TableInfo { pub schema: String, pub name: String, pub kind: String }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ForeignKeyInfo {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
     pub nullable: bool,
     pub primary_key: bool,
+    pub foreign_key: Option<ForeignKeyInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

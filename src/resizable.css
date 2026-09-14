@@ -49,6 +49,60 @@ body,
   scrollbar-gutter: stable;
 }
 
+.column-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.column-heading > span:first-child {
+  font-weight: 650;
+}
+
+.column-heading + small {
+  display: block;
+  margin-top: 3px;
+  color: #666e7c;
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.column-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.key-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.primary-key {
+  background: #493b20;
+  color: #f2c768;
+}
+
+.foreign-key {
+  background: #243750;
+  color: #8fc5ff;
+}
+
+.data-grid th.foreign-key-column {
+  box-shadow: inset 0 2px #5799d8;
+}
+
+.data-grid td.foreign-key-cell {
+  color: #9dcaff;
+  background: #14202b;
+}
+
 .connection-sidebar,
 .object-sidebar {
   border-right: 0;

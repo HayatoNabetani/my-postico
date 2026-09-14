@@ -88,7 +88,7 @@ fn compile_node(node: &FilterNode, columns: &HashMap<&str, &ColumnInfo>, params:
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn columns() -> Vec<ColumnInfo> { vec![ColumnInfo { name: "name".into(), data_type: "text".into(), nullable: false, primary_key: false }] }
+    fn columns() -> Vec<ColumnInfo> { vec![ColumnInfo { name: "name".into(), data_type: "text".into(), nullable: false, primary_key: false, foreign_key: None }] }
 
     #[test]
     fn compiles_parameters_without_interpolation() {
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn sends_numeric_values_as_text_before_server_side_casting() {
-        let columns = vec![ColumnInfo { name: "age".into(), data_type: "integer".into(), nullable: false, primary_key: false }];
+        let columns = vec![ColumnInfo { name: "age".into(), data_type: "integer".into(), nullable: false, primary_key: false, foreign_key: None }];
         let filter = FilterNode::Condition { column: "age".into(), operator: "gte".into(), value: Some("18".into()), second_value: None, values: None, enabled: true };
         let result = compile(&filter, &columns).unwrap();
         assert_eq!(result.sql, "\"age\" >= ($1::text)::integer");
