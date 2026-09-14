@@ -147,6 +147,77 @@ body,
   cursor: default;
 }
 
+.tabbar {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.table-tabs {
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.table-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.table-tab {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  border-right: 1px solid var(--line);
+  background: #171a20;
+  color: #7f8692;
+}
+
+.table-tab.active {
+  background: var(--bg);
+  color: #e4e0ec;
+  border-top: 1px solid var(--accent);
+}
+
+.tabbar .table-tab button {
+  border: 0;
+  background: transparent;
+}
+
+.tabbar .table-tab .tab-select {
+  max-width: 180px;
+  padding: 0 5px 0 12px;
+  border-right: 0;
+}
+
+.tab-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-select i {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #e4b96d;
+}
+
+.tabbar .table-tab .tab-close {
+  padding: 0 7px 0 3px;
+  border-right: 0;
+  color: #686f7b;
+}
+
+.tabbar .table-tab .tab-close:hover {
+  color: #fff;
+}
+
+.tabbar .sql-tab,
+.tabbar .tab-more {
+  flex: none;
+}
+
 .column-heading {
   display: flex;
   align-items: center;

@@ -11,6 +11,8 @@ interface Props {
   onNext?: () => void;
   onQuickFilter: (column: string, value: unknown) => void;
   onApplyChanges?: (updates: TableRowUpdate[]) => Promise<void>;
+  drafts?: Record<string, string>;
+  onDraftsChange?: (drafts: Record<string, string>) => void;
 }
 
 interface EditingCell { key: string; value: string }
@@ -23,8 +25,7 @@ function display(value: unknown): string {
 
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 
-export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges }: Props) {
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange }: Props) {
   const [editing, setEditing] = useState<EditingCell>();
   const [applying, setApplying] = useState(false);
   if (loading && !page) return <div className="empty-state"><div className="spinner"/><p>データを取得しています</p></div>;
@@ -38,11 +39,9 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     if (!editing) return;
     const [rowText, column] = editing.key.split("\u0000");
     const original = display(page!.rows[Number(rowText)]?.[column]);
-    setDrafts((current) => {
-      const next = {...current};
+    const next = {...drafts};
       if (editing.value === original) delete next[editing.key]; else next[editing.key] = editing.value;
-      return next;
-    });
+    onDraftsChange?.(next);
     setEditing(undefined);
   }
 
@@ -61,7 +60,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     setApplying(true);
     try {
       await onApplyChanges(updates);
-      setDrafts({});
+      onDraftsChange?.({});
       setEditing(undefined);
     } catch {
       // The parent displays the database error; keep drafts for correction/retry.
@@ -71,7 +70,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
   }
 
   return <div className="data-view">
-    {Object.keys(drafts).length > 0 && <div className="pending-changes"><span><b>{Object.keys(drafts).length}</b>セル・<b>{pendingRows}</b>行の変更が未反映です</span><button onClick={() => { setDrafts({}); setEditing(undefined); }}><RotateCcw size={13}/>破棄</button><button className="primary" disabled={applying || loading} onClick={() => void applyChanges()}><Check size={13}/>{applying ? "反映中…" : "変更を適用"}</button></div>}
+    {Object.keys(drafts).length > 0 && <div className="pending-changes"><span><b>{Object.keys(drafts).length}</b>セル・<b>{pendingRows}</b>行の変更が未反映です</span><button onClick={() => { onDraftsChange?.({}); setEditing(undefined); }}><RotateCcw size={13}/>破棄</button><button className="primary" disabled={applying || loading} onClick={() => void applyChanges()}><Check size={13}/>{applying ? "反映中…" : "変更を適用"}</button></div>}
     <div className="grid-wrap">
       <table className="data-grid"><thead><tr><th className="row-number">#</th>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
