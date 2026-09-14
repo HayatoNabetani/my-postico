@@ -1,5 +1,5 @@
-import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useState } from "react";
-import { ChevronsLeft, Circle, Database, FileCode2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Save, Server, Settings, Shield, Table2, Trash2, Unplug, X } from "lucide-react";
+import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronsLeft, Circle, Database, FileCode2, MoreHorizontal, Pencil, Play, Plus, RefreshCw, Save, Search, Server, Settings, Shield, Table2, Trash2, Unplug, X } from "lucide-react";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { DataGrid } from "./components/DataGrid";
 import { emptyFilter, FilterBuilder, newCondition } from "./components/FilterBuilder";
@@ -52,6 +52,8 @@ export default function App() {
   const [sqlOpen, setSqlOpen] = useState(false);
   const [sql, setSql] = useState("select now() as server_time;");
   const [sqlPage, setSqlPage] = useState<QueryPage>();
+  const [objectSearch, setObjectSearch] = useState("");
+  const objectSearchRef = useRef<HTMLInputElement>(null);
   const [connectionWidth, setConnectionWidth] = useState(() => savedSize("my-postico:connection-width", DEFAULT_CONNECTION_WIDTH));
   const [objectWidth, setObjectWidth] = useState(() => savedSize("my-postico:object-width", DEFAULT_OBJECT_WIDTH));
   const [sqlEditorHeight, setSqlEditorHeight] = useState(() => savedSize("my-postico:sql-editor-height", DEFAULT_SQL_EDITOR_HEIGHT));
@@ -64,6 +66,14 @@ export default function App() {
   useEffect(() => { localStorage.setItem("my-postico:connection-width", String(connectionWidth)); }, [connectionWidth]);
   useEffect(() => { localStorage.setItem("my-postico:object-width", String(objectWidth)); }, [objectWidth]);
   useEffect(() => { localStorage.setItem("my-postico:sql-editor-height", String(sqlEditorHeight)); }, [sqlEditorHeight]);
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f" || !connected) return;
+      event.preventDefault(); objectSearchRef.current?.focus(); objectSearchRef.current?.select();
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, [connected]);
 
   function patchTab(id: string, patch: Partial<TableTab>) {
     setTableTabs((current) => current.map((tab) => tab.id === id ? {...tab, ...patch} : tab));
@@ -84,7 +94,7 @@ export default function App() {
     await api.deleteProfile(profile.id);
     setProfiles(await api.listProfiles());
     if (active?.id === profile.id) {
-      setActive(undefined); setConnected(false); setTableTabs([]); setActiveTableTabId(undefined);
+      setActive(undefined); setConnected(false); setTableTabs([]); setActiveTableTabId(undefined); setObjectSearch("");
     }
   }
 
@@ -96,7 +106,7 @@ export default function App() {
       setActive(profile); setConnected(true); setStatus(profile.ssh.enabled ? "SSHトンネル経由で接続済み" : "接続済み");
       const nextSchemas = await api.listSchemas(profile.id);
       const entries = await Promise.all(nextSchemas.map(async (schema) => [schema.name, await api.listTables(profile.id, schema.name)] as const));
-      setSchemas(nextSchemas); setTables(Object.fromEntries(entries)); setTableTabs([]); setActiveTableTabId(undefined); setSqlPage(undefined);
+      setSchemas(nextSchemas); setTables(Object.fromEntries(entries)); setTableTabs([]); setActiveTableTabId(undefined); setSqlPage(undefined); setObjectSearch("");
     } catch (reason) {
       const message = String(reason);
       const marker = "UNKNOWN_HOST_KEY:";
@@ -122,7 +132,7 @@ export default function App() {
   async function disconnect() {
     if (!confirmDiscardTabs()) return;
     if (active) await api.disconnectProfile(active.id).catch(() => undefined);
-    setConnected(false); setActive(undefined); setSchemas([]); setTables({}); setTableTabs([]); setActiveTableTabId(undefined); setSqlPage(undefined); setStatus("切断しました");
+    setConnected(false); setActive(undefined); setSchemas([]); setTables({}); setTableTabs([]); setActiveTableTabId(undefined); setSqlPage(undefined); setObjectSearch(""); setStatus("切断しました");
   }
 
   async function openTable(table: TableInfo) {
@@ -260,7 +270,14 @@ export default function App() {
 
     <aside className="object-sidebar">
       <header data-tauri-drag-region><div data-tauri-drag-region><Server size={16}/><strong data-tauri-drag-region>{active?.database ?? "Database"}</strong></div><button disabled={!connected} onClick={() => active && void connect(active)}><RefreshCw size={14}/></button></header>
-      {!connected ? <div className="sidebar-empty">接続するとスキーマが<br/>ここに表示されます</div> : <div className="schema-tree">{schemas.map((schema) => <div key={schema.name}><div className="schema-name"><ChevronsLeft size={13}/>{schema.name}</div>{tables[schema.name]?.map((table) => <button key={`${schema.name}.${table.name}`} className={!sqlOpen && selectedTable?.schema === schema.name && selectedTable.name === table.name ? "selected" : ""} onClick={() => void openTable(table)}><Table2 size={14}/>{table.name}<span>{table.kind === "view" ? "V" : ""}</span></button>)}</div>)}</div>}
+      <div className="object-search"><Search size={13}/><input ref={objectSearchRef} disabled={!connected} value={objectSearch} onChange={(event) => setObjectSearch(event.target.value)} placeholder="テーブルを検索  ⌘F" aria-label="スキーマ、テーブル、ビューを検索"/>{objectSearch && <button title="検索をクリア" onClick={() => { setObjectSearch(""); objectSearchRef.current?.focus(); }}><X size={12}/></button>}</div>
+      {!connected ? <div className="sidebar-empty">接続するとスキーマが<br/>ここに表示されます</div> : <div className="schema-tree">{schemas.map((schema) => {
+        const query = objectSearch.trim().toLocaleLowerCase();
+        const matchesSchema = schema.name.toLocaleLowerCase().includes(query);
+        const visibleTables = (tables[schema.name] ?? []).filter((table) => !query || matchesSchema || table.name.toLocaleLowerCase().includes(query));
+        if (query && !matchesSchema && visibleTables.length === 0) return null;
+        return <div key={schema.name}><div className="schema-name"><ChevronsLeft size={13}/>{schema.name}</div>{visibleTables.map((table) => <button key={`${schema.name}.${table.name}`} className={!sqlOpen && selectedTable?.schema === schema.name && selectedTable.name === table.name ? "selected" : ""} onClick={() => void openTable(table)}><Table2 size={14}/>{table.name}<span>{table.kind === "view" ? "V" : ""}</span></button>)}</div>;
+      })}</div>}
     </aside>
 
     <div className="resize-handle column-resize-handle" role="separator" aria-label="オブジェクトサイドバーの幅を変更" aria-orientation="vertical" tabIndex={0} onPointerDown={(event) => beginHorizontalResize(event, objectWidth, setObjectWidth, 160, 480)} onKeyDown={(event) => resizeWithKeyboard(event, objectWidth, setObjectWidth, 160, 480)} onDoubleClick={() => setObjectWidth(DEFAULT_OBJECT_WIDTH)}/>
