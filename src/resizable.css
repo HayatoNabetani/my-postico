@@ -1,0 +1,76 @@
+/* Workspace pane sizing overrides. */
+body {
+  min-width: 760px;
+}
+
+.app-shell {
+  grid-template-columns:
+    var(--connection-width, 230px) 5px
+    var(--object-width, 230px) 5px
+    minmax(0, 1fr);
+}
+
+.connection-sidebar,
+.object-sidebar {
+  border-right: 0;
+}
+
+.sql-workspace {
+  grid-template-rows:
+    34px minmax(80px, var(--sql-editor-height, 180px))
+    5px minmax(0, 1fr);
+}
+
+.resize-handle {
+  position: relative;
+  z-index: 8;
+  background: #14171c;
+  touch-action: none;
+  outline: none;
+}
+
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.resize-handle:hover::after,
+.resize-handle:focus-visible::after,
+.resizing-columns .column-resize-handle::after,
+.resizing-rows .row-resize-handle::after {
+  background: var(--accent2);
+}
+
+.column-resize-handle {
+  cursor: col-resize;
+  border-left: 1px solid #20242b;
+  border-right: 1px solid var(--line);
+}
+
+.column-resize-handle::after {
+  inset: 0 1px;
+}
+
+.row-resize-handle {
+  cursor: row-resize;
+  border-top: 1px solid #20242b;
+  border-bottom: 1px solid var(--line);
+}
+
+.row-resize-handle::after {
+  inset: 1px 0;
+}
+
+.resizing-columns,
+.resizing-columns * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.resizing-rows,
+.resizing-rows * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
