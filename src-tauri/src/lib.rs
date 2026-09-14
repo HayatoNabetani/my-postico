@@ -68,8 +68,8 @@ fn get_columns(state: tauri::State<AppState>, profile_id: String, schema: String
 }
 
 #[tauri::command]
-fn query_table(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, filter: FilterNode, limit: u32, offset: u32) -> Result<QueryPage, String> {
-    with_connection(&state, &profile_id, |db| db::query_table(&mut db.client, &schema, &table, &filter, limit, offset))
+fn query_table(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, filter: FilterNode, offset: u32) -> Result<QueryPage, String> {
+    with_connection(&state, &profile_id, |db| db::query_table(&mut db.client, &schema, &table, &filter, offset))
 }
 
 #[tauri::command]

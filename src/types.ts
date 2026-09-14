@@ -18,7 +18,7 @@ export interface ConnectionProfile {
   port: number;
   database: string;
   username: string;
-  sslMode: "disable" | "prefer" | "require";
+  sslMode: "disable" | "prefer" | "require" | "verifyFull";
   environment: Environment;
   readOnly: boolean;
   ssh: SshConfig;

@@ -32,8 +32,8 @@ export const disconnectProfile = (id: string) => invoke<void>("disconnect_profil
 export const listSchemas = (profileId: string) => invoke<SchemaInfo[]>("list_schemas", { profileId });
 export const listTables = (profileId: string, schema: string) => invoke<TableInfo[]>("list_tables", { profileId, schema });
 export const getColumns = (profileId: string, schema: string, table: string) => invoke<ColumnInfo[]>("get_columns", { profileId, schema, table });
-export const queryTable = (profileId: string, schema: string, table: string, filter: FilterGroup, limit: number, offset: number) =>
-  invoke<QueryPage>("query_table", { profileId, schema, table, filter, limit, offset });
+export const queryTable = (profileId: string, schema: string, table: string, filter: FilterGroup, offset: number) =>
+  invoke<QueryPage>("query_table", { profileId, schema, table, filter, offset });
 export const executeSql = (profileId: string, sql: string) => invoke<QueryPage>("execute_sql", { profileId, sql });
 
 export function loadSavedFilters(): SavedFilter[] {

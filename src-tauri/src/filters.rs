@@ -26,6 +26,11 @@ fn pattern_value(operator: &str, value: &str) -> String {
     match operator { "contains" | "notContains" => format!("%{escaped}%"), "startsWith" => format!("{escaped}%"), "endsWith" => format!("%{escaped}"), _ => value.to_owned() }
 }
 
+fn typed_parameter(index: usize, data_type: &str) -> String {
+    let cast = cast_for(data_type);
+    if cast == "text" { format!("${index}::text") } else { format!("(${}::text)::{cast}", index) }
+}
+
 pub fn compile(root: &FilterNode, columns: &[ColumnInfo]) -> Result<CompiledFilter, String> {
     let lookup: HashMap<&str, &ColumnInfo> = columns.iter().map(|column| (column.name.as_str(), column)).collect();
     let mut params = Vec::new();
@@ -45,23 +50,22 @@ fn compile_node(node: &FilterNode, columns: &HashMap<&str, &ColumnInfo>, params:
             if !enabled || column.is_empty() { return Ok(None); }
             let meta = columns.get(column.as_str()).ok_or_else(|| format!("カラム「{column}」は現在のテーブルに存在しません"))?;
             let identifier = quote_identifier(column);
-            let cast = cast_for(&meta.data_type);
             let unary = match operator.as_str() { "isNull" => Some("IS NULL"), "isNotNull" => Some("IS NOT NULL"), _ => None };
             if let Some(unary) = unary { return Ok(Some(format!("{identifier} {unary}"))); }
             if operator == "between" {
                 let first = value.as_deref().filter(|v| !v.is_empty()).ok_or("範囲の下限を入力してください")?;
                 let second = second_value.as_deref().filter(|v| !v.is_empty()).ok_or("範囲の上限を入力してください")?;
                 params.push(first.into()); let p1 = params.len(); params.push(second.into()); let p2 = params.len();
-                return Ok(Some(format!("{identifier} BETWEEN ${p1}::{cast} AND ${p2}::{cast}")));
+                return Ok(Some(format!("{identifier} BETWEEN {} AND {}", typed_parameter(p1, &meta.data_type), typed_parameter(p2, &meta.data_type))));
             }
             if matches!(operator.as_str(), "in" | "notIn") {
                 let items = values.as_ref().filter(|v| !v.is_empty()).ok_or("フィルター値を1つ以上入力してください")?;
                 let mut placeholders = Vec::new();
-                for item in items { params.push(item.clone()); placeholders.push(format!("${}::{cast}", params.len())); }
+                for item in items { params.push(item.clone()); placeholders.push(typed_parameter(params.len(), &meta.data_type)); }
                 let keyword = if operator == "in" { "IN" } else { "NOT IN" };
                 return Ok(Some(format!("{identifier} {keyword} ({})", placeholders.join(", "))));
             }
-            let raw = value.as_deref().ok_or("フィルター値を入力してください")?;
+            let raw = value.as_deref().filter(|v| !v.is_empty()).ok_or("フィルター値を入力してください")?;
             let comparison = match operator.as_str() {
                 "eq" => "=", "neq" => "<>", "gt" => ">", "gte" => ">=", "lt" => "<", "lte" => "<=",
                 "contains" | "startsWith" | "endsWith" | "ilike" => "ILIKE",
@@ -74,7 +78,7 @@ fn compile_node(node: &FilterNode, columns: &HashMap<&str, &ColumnInfo>, params:
             let expression = if is_pattern {
                 format!("{identifier}::text {comparison} ${placeholder}::text ESCAPE E'\\\\'")
             } else {
-                format!("{identifier} {comparison} ${placeholder}::{cast}")
+                format!("{identifier} {comparison} {}", typed_parameter(placeholder, &meta.data_type))
             };
             Ok(Some(expression))
         }
@@ -108,5 +112,14 @@ mod tests {
         let result = compile(&filter, &columns()).unwrap();
         assert!(result.sql.contains("BETWEEN $1::text AND $2::text"));
         assert_eq!(result.params, ["a", "z"]);
+    }
+
+    #[test]
+    fn sends_numeric_values_as_text_before_server_side_casting() {
+        let columns = vec![ColumnInfo { name: "age".into(), data_type: "integer".into(), nullable: false, primary_key: false }];
+        let filter = FilterNode::Condition { column: "age".into(), operator: "gte".into(), value: Some("18".into()), second_value: None, values: None, enabled: true };
+        let result = compile(&filter, &columns).unwrap();
+        assert_eq!(result.sql, "\"age\" >= ($1::text)::integer");
+        assert_eq!(result.params, ["18"]);
     }
 }

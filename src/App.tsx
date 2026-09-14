@@ -102,10 +102,9 @@ export default function App() {
     const next = emptyFilter();
     try {
       const nextColumns = await api.getColumns(active.id, table.schema, table.name); setColumns(nextColumns);
-      if (next.children[0]?.kind === "condition") next.children[0].column = nextColumns[0]?.name ?? "";
       const last = savedFilters.find((item) => item.profileId === active.id && item.schema === table.schema && item.table === table.name && item.name === "__last__");
       const nextFilter = last?.root ?? next; setFilter(nextFilter); setAppliedFilter(nextFilter);
-      setOffset(0); setPage(await api.queryTable(active.id, table.schema, table.name, nextFilter, 100, 0));
+      setOffset(0); setPage(await api.queryTable(active.id, table.schema, table.name, nextFilter, 0));
     } catch (reason) { setError(String(reason)); }
     finally { setLoading(false); }
   }
@@ -113,7 +112,7 @@ export default function App() {
   async function applyFilter(nextFilter = filter, nextOffset = 0) {
     if (!active || !selectedTable) return; setLoading(true); setError(""); setAppliedFilter(nextFilter);
     try {
-      setOffset(nextOffset); setPage(await api.queryTable(active.id, selectedTable.schema, selectedTable.name, nextFilter, 100, nextOffset));
+      setOffset(nextOffset); setPage(await api.queryTable(active.id, selectedTable.schema, selectedTable.name, nextFilter, nextOffset));
       const last: SavedFilter = {id: `${active.id}:${selectedTable.schema}:${selectedTable.name}:last`, profileId: active.id, schema: selectedTable.schema, table: selectedTable.name, name: "__last__", root: nextFilter};
       const next = [...savedFilters.filter((item) => item.id !== last.id), last]; setSavedFilters(next); api.persistSavedFilters(next);
     } catch (reason) { setError(String(reason)); }

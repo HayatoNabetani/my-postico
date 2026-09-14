@@ -6,7 +6,7 @@ macOS向けの個人用PostgreSQL GUIクライアントです。GUIで組み立�
 
 - PostgreSQL接続プロファイルの作成・編集・削除
 - DBパスワード、SSHパスワード、秘密鍵パスフレーズのmacOS Keychain保存
-- SSL接続（Disable / Prefer / Require）
+- SSL接続（Disable / Prefer / Require / Verify Full）
 - SSHトンネル（パスワード、秘密鍵、SSH Agent）
 - SSHホスト鍵のSHA-256フィンガープリント確認と変更検知
 - スキーマ、テーブル、ビュー、カラムの読み込み

@@ -3,6 +3,7 @@ use native_tls::TlsConnector;
 use postgres::{Client, Config, NoTls, config::SslMode, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
 use serde_json::Value;
+use std::error::Error;
 
 pub struct ConnectedDb {
     pub client: Client,
@@ -10,20 +11,41 @@ pub struct ConnectedDb {
     pub read_only: bool,
 }
 
+const TABLE_PAGE_SIZE: u32 = 100;
+
 fn quote_identifier(value: &str) -> String { format!("\"{}\"", value.replace('"', "\"\"")) }
+
+fn error_message(error: &(dyn Error + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let message = cause.to_string();
+        if !messages.contains(&message) { messages.push(message); }
+        source = cause.source();
+    }
+    messages.join(": ")
+}
 
 pub fn connect(profile: &ConnectionProfile) -> Result<ConnectedDb, String> {
     let tunnel = if profile.ssh.enabled { Some(SshTunnel::start(profile)?) } else { None };
     let mut config = Config::new();
     config.host(&profile.host).port(tunnel.as_ref().map(SshTunnel::local_port).unwrap_or(profile.port)).dbname(&profile.database).user(&profile.username).connect_timeout(std::time::Duration::from_secs(12));
     if tunnel.is_some() { config.hostaddr(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)); }
-    config.ssl_mode(match profile.ssl_mode.as_str() { "disable" => SslMode::Disable, "require" => SslMode::Require, _ => SslMode::Prefer });
+    config.ssl_mode(match profile.ssl_mode.as_str() { "disable" => SslMode::Disable, "require" | "verifyFull" => SslMode::Require, _ => SslMode::Prefer });
     if let Some(password) = store::get_secret(&profile.id, "db-password") { config.password(password); }
     let mut client = if profile.ssl_mode == "disable" {
-        config.connect(NoTls).map_err(|e| format!("PostgreSQL接続エラー: {e}"))?
+        config.connect(NoTls).map_err(|e| format!("PostgreSQL接続エラー: {}", error_message(&e)))?
     } else {
-        let connector = TlsConnector::builder().build().map_err(|e| e.to_string())?;
-        config.connect(MakeTlsConnector::new(connector)).map_err(|e| format!("PostgreSQL SSL接続エラー: {e}"))?
+        let mut builder = TlsConnector::builder();
+        // libpq's `require` encrypts the connection but only `verify-full`
+        // validates the certificate chain and server name. Keep the UI modes
+        // compatible with those semantics, especially for private RDS CAs.
+        if profile.ssl_mode != "verifyFull" {
+            builder.danger_accept_invalid_certs(true);
+            builder.danger_accept_invalid_hostnames(true);
+        }
+        let connector = builder.build().map_err(|e| format!("TLS設定エラー: {}", error_message(&e)))?;
+        config.connect(MakeTlsConnector::new(connector)).map_err(|e| format!("PostgreSQL SSL接続エラー: {}", error_message(&e)))?
     };
     if profile.read_only { client.batch_execute("SET default_transaction_read_only = on").map_err(|e| e.to_string())?; }
     Ok(ConnectedDb { client, _tunnel: tunnel, read_only: profile.read_only })
@@ -60,19 +82,20 @@ pub fn columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
     }).collect())
 }
 
-pub fn query_table(client: &mut Client, schema: &str, table: &str, filter: &FilterNode, limit: u32, offset: u32) -> Result<QueryPage, String> {
+pub fn query_table(client: &mut Client, schema: &str, table: &str, filter: &FilterNode, offset: u32) -> Result<QueryPage, String> {
     let columns = columns(client, schema, table)?;
     let compiled = filters::compile(filter, &columns)?;
-    let limit = limit.clamp(1, 500);
     let order = columns.iter().filter(|c| c.primary_key).map(|c| quote_identifier(&c.name)).collect::<Vec<_>>();
     let order_sql = if order.is_empty() { "ctid".into() } else { order.join(", ") };
     let qualified = format!("{}.{}", quote_identifier(schema), quote_identifier(table));
-    let sql = format!("SELECT to_jsonb(__mp_row) FROM (SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {} OFFSET {offset}) __mp_row", compiled.sql, limit + 1);
+    // Fetch one extra row to determine whether a next page exists. This avoids
+    // an expensive COUNT(*) while keeping the visible page capped at 100 rows.
+    let sql = format!("SELECT to_jsonb(__mp_row) FROM (SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {} OFFSET {offset}) __mp_row", compiled.sql, TABLE_PAGE_SIZE + 1);
     let refs: Vec<&(dyn ToSql + Sync)> = compiled.params.iter().map(|value| value as &(dyn ToSql + Sync)).collect();
     let mut rows = client.query(&sql, &refs).map_err(|e| format!("フィルター実行エラー: {e}"))?.into_iter().map(|row| row.get::<_, Value>(0).as_object().cloned().unwrap_or_default()).collect::<Vec<_>>();
-    let has_more = rows.len() > limit as usize;
+    let has_more = rows.len() > TABLE_PAGE_SIZE as usize;
     if has_more { rows.pop(); }
-    Ok(QueryPage { columns: columns.into_iter().map(|c| c.name).collect(), rows, has_more, sql_preview: format!("SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {limit} OFFSET {offset}", compiled.sql) })
+    Ok(QueryPage { columns: columns.into_iter().map(|c| c.name).collect(), rows, has_more, sql_preview: format!("SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {TABLE_PAGE_SIZE} OFFSET {offset}", compiled.sql) })
 }
 
 pub fn execute_sql(client: &mut Client, sql: &str, read_only: bool) -> Result<QueryPage, String> {

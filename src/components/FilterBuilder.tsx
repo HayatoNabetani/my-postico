@@ -20,7 +20,7 @@ function choicesFor(columnName: string, columns: ColumnInfo[]) {
 }
 
 export const newCondition = (column = ""): FilterCondition => ({ id: crypto.randomUUID(), kind: "condition", column, operator: "eq", value: "", enabled: true });
-export const emptyFilter = (): FilterGroup => ({ id: crypto.randomUUID(), kind: "group", conjunction: "and", enabled: true, children: [newCondition()] });
+export const emptyFilter = (): FilterGroup => ({ id: crypto.randomUUID(), kind: "group", conjunction: "and", enabled: true, children: [] });
 
 interface Props {
   root: FilterGroup;

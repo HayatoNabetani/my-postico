@@ -50,7 +50,7 @@ export function ConnectionDialog({ initial, onClose, onSave }: Props) {
           <label>データベース<input required value={profile.database} onChange={(e) => change("database", e.target.value)}/></label>
           <label>ユーザー<input required value={profile.username} onChange={(e) => change("username", e.target.value)}/></label>
           <label>パスワード<input type="password" placeholder={initial ? "変更しない" : "Keychainに保存"} value={secrets.dbPassword ?? ""} onChange={(e) => setSecrets({...secrets, dbPassword: e.target.value})}/></label>
-          <label>SSL<select value={profile.sslMode} onChange={(e) => change("sslMode", e.target.value as ConnectionProfile["sslMode"])}><option value="disable">Disable</option><option value="prefer">Prefer</option><option value="require">Require</option></select></label>
+          <label>SSL<select value={profile.sslMode} onChange={(e) => change("sslMode", e.target.value as ConnectionProfile["sslMode"])}><option value="disable">Disable</option><option value="prefer">Prefer</option><option value="require">Require</option><option value="verifyFull">Verify Full</option></select></label>
           <label>環境<select value={profile.environment} onChange={(e) => change("environment", e.target.value as ConnectionProfile["environment"])}><option>Local</option><option>Development</option><option>Staging</option><option>Production</option></select></label>
           <label className="toggle-label"><input type="checkbox" checked={profile.readOnly} onChange={(e) => change("readOnly", e.target.checked)}/> 読み取り専用</label>
         </div>
