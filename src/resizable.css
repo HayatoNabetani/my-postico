@@ -3,11 +3,50 @@ body {
   min-width: 760px;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 .app-shell {
+  min-height: 0;
   grid-template-columns:
     var(--connection-width, 230px) 5px
     var(--object-width, 230px) 5px
     minmax(0, 1fr);
+}
+
+.connection-sidebar,
+.object-sidebar,
+.workspace,
+.sql-workspace {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.connection-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.object-sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.schema-tree {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.grid-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .connection-sidebar,
