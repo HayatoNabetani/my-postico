@@ -10,7 +10,7 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn cast_for(data_type: &str) -> &'static str {
+pub(crate) fn cast_for(data_type: &str) -> &'static str {
     match data_type {
         "smallint" => "smallint", "integer" => "integer", "bigint" => "bigint",
         "numeric" | "decimal" => "numeric", "real" => "real", "double precision" => "double precision",
@@ -26,7 +26,7 @@ fn pattern_value(operator: &str, value: &str) -> String {
     match operator { "contains" | "notContains" => format!("%{escaped}%"), "startsWith" => format!("{escaped}%"), "endsWith" => format!("%{escaped}"), _ => value.to_owned() }
 }
 
-fn typed_parameter(index: usize, data_type: &str) -> String {
+pub(crate) fn typed_parameter(index: usize, data_type: &str) -> String {
     let cast = cast_for(data_type);
     if cast == "text" { format!("${index}::text") } else { format!("(${}::text)::{cast}", index) }
 }

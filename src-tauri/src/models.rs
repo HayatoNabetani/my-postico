@@ -87,3 +87,10 @@ pub struct QueryPage {
     pub has_more: bool,
     pub sql_preview: String,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRowUpdate {
+    pub primary_key: serde_json::Map<String, serde_json::Value>,
+    pub values: serde_json::Map<String, serde_json::Value>,
+}

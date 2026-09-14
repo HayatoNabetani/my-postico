@@ -49,6 +49,74 @@ body,
   scrollbar-gutter: stable;
 }
 
+.data-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pending-changes {
+  flex: none;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid #584623;
+  background: #292315;
+  color: #d7bd82;
+  font-size: 10px;
+}
+
+.pending-changes span {
+  margin-right: auto;
+}
+
+.pending-changes button {
+  height: 25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #55482d;
+  border-radius: 5px;
+  background: #342c1b;
+  color: #dec78f;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.pending-changes button.primary {
+  border-color: #9175e8;
+  background: var(--accent2);
+  color: white;
+}
+
+.data-grid td.pending-cell {
+  background: #3a3019;
+  color: #ffe0a0;
+  box-shadow: inset 0 0 0 1px #745d2b;
+}
+
+.data-grid td.editing-cell {
+  padding: 0;
+}
+
+.editing-cell input {
+  width: 100%;
+  min-width: 120px;
+  height: 30px;
+  border: 2px solid var(--accent);
+  outline: 0;
+  background: #181421;
+  color: #fff;
+  padding: 4px 7px;
+  font: inherit;
+}
+
 .column-heading {
   display: flex;
   align-items: center;

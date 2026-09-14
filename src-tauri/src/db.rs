@@ -1,4 +1,4 @@
-use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, TableInfo}, ssh::SshTunnel, store};
+use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, TableInfo, TableRowUpdate}, ssh::SshTunnel, store};
 use native_tls::TlsConnector;
 use postgres::{Client, Config, NoTls, config::SslMode, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
@@ -123,6 +123,58 @@ pub fn query_table(client: &mut Client, schema: &str, table: &str, filter: &Filt
     let has_more = rows.len() > TABLE_PAGE_SIZE as usize;
     if has_more { rows.pop(); }
     Ok(QueryPage { columns: columns.into_iter().map(|c| c.name).collect(), rows, has_more, sql_preview: format!("SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {TABLE_PAGE_SIZE} OFFSET {offset}", compiled.sql) })
+}
+
+fn editable_value(value: &Value) -> Result<String, String> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Null => Err("NULL".into()),
+        _ => serde_json::to_string(value).map_err(|e| e.to_string()),
+    }
+}
+
+pub fn apply_table_updates(client: &mut Client, schema: &str, table: &str, updates: Vec<TableRowUpdate>, read_only: bool) -> Result<u64, String> {
+    if read_only { return Err("読み取り専用接続ではテーブルを編集できません".into()); }
+    if updates.is_empty() { return Ok(0); }
+    let columns = columns(client, schema, table)?;
+    let primary_keys = columns.iter().filter(|column| column.primary_key).collect::<Vec<_>>();
+    if primary_keys.is_empty() { return Err("主キーがないテーブルは安全に編集できません".into()); }
+    let column_lookup = columns.iter().map(|column| (column.name.as_str(), column)).collect::<std::collections::HashMap<_, _>>();
+    let qualified = format!("{}.{}", quote_identifier(schema), quote_identifier(table));
+    let mut transaction = client.transaction().map_err(|e| format!("更新トランザクションを開始できません: {e}"))?;
+    let mut updated = 0;
+
+    for update in updates {
+        if update.values.is_empty() { continue; }
+        let mut params = Vec::<String>::new();
+        let mut assignments = Vec::new();
+        for (name, value) in &update.values {
+            let column = column_lookup.get(name.as_str()).ok_or_else(|| format!("カラム「{name}」は現在のテーブルに存在しません"))?;
+            if value.is_null() {
+                if !column.nullable { return Err(format!("カラム「{name}」はNULLにできません")); }
+                assignments.push(format!("{} = NULL", quote_identifier(name)));
+            } else {
+                params.push(editable_value(value)?);
+                assignments.push(format!("{} = {}", quote_identifier(name), filters::typed_parameter(params.len(), &column.data_type)));
+            }
+        }
+
+        let mut predicates = Vec::new();
+        for column in &primary_keys {
+            let value = update.primary_key.get(&column.name).ok_or_else(|| format!("主キー「{}」の元の値がありません", column.name))?;
+            params.push(editable_value(value).map_err(|_| format!("主キー「{}」がNULLです", column.name))?);
+            predicates.push(format!("{} = {}", quote_identifier(&column.name), filters::typed_parameter(params.len(), &column.data_type)));
+        }
+        let sql = format!("UPDATE {qualified} SET {} WHERE {}", assignments.join(", "), predicates.join(" AND "));
+        let refs = params.iter().map(|value| value as &(dyn ToSql + Sync)).collect::<Vec<_>>();
+        let affected = transaction.execute(&sql, &refs).map_err(|e| format!("テーブル更新エラー: {e}"))?;
+        if affected != 1 { return Err(format!("更新対象が1行に特定できませんでした（{affected}行）")); }
+        updated += affected;
+    }
+    transaction.commit().map_err(|e| format!("更新を確定できません: {e}"))?;
+    Ok(updated)
 }
 
 pub fn execute_sql(client: &mut Client, sql: &str, read_only: bool) -> Result<QueryPage, String> {

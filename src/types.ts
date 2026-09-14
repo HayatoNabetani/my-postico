@@ -76,6 +76,11 @@ export interface QueryPage {
   sqlPreview: string;
 }
 
+export interface TableRowUpdate {
+  primaryKey: Record<string, unknown>;
+  values: Record<string, unknown>;
+}
+
 export interface SavedFilter {
   id: string;
   profileId: string;

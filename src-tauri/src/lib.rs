@@ -5,7 +5,7 @@ mod ssh;
 mod store;
 
 use db::ConnectedDb;
-use models::{ColumnInfo, ConnectionProfile, FilterNode, ProfileSecrets, QueryPage, SchemaInfo, TableInfo};
+use models::{ColumnInfo, ConnectionProfile, FilterNode, ProfileSecrets, QueryPage, SchemaInfo, TableInfo, TableRowUpdate};
 use std::{collections::HashMap, sync::Mutex};
 
 #[derive(Default)]
@@ -73,6 +73,11 @@ fn query_table(state: tauri::State<AppState>, profile_id: String, schema: String
 }
 
 #[tauri::command]
+fn apply_table_updates(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, updates: Vec<TableRowUpdate>) -> Result<u64, String> {
+    with_connection(&state, &profile_id, |db| db::apply_table_updates(&mut db.client, &schema, &table, updates, db.read_only))
+}
+
+#[tauri::command]
 fn execute_sql(state: tauri::State<AppState>, profile_id: String, sql: String) -> Result<QueryPage, String> {
     with_connection(&state, &profile_id, |db| db::execute_sql(&mut db.client, &sql, db.read_only))
 }
@@ -81,7 +86,7 @@ fn execute_sql(state: tauri::State<AppState>, profile_id: String, sql: String) -
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![list_profiles, save_profile, delete_profile, test_connection, connect_profile, disconnect_profile, list_schemas, list_tables, get_columns, query_table, execute_sql])
+        .invoke_handler(tauri::generate_handler![list_profiles, save_profile, delete_profile, test_connection, connect_profile, disconnect_profile, list_schemas, list_tables, get_columns, query_table, apply_table_updates, execute_sql])
         .run(tauri::generate_context!())
         .expect("failed to run My Postico");
 }
