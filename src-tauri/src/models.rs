@@ -88,6 +88,14 @@ pub struct QueryPage {
     pub sql_preview: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SortRule {
+    pub column: String,
+    pub direction: String,
+    pub nulls: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRowUpdate {

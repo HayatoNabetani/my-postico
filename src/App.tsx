@@ -4,7 +4,7 @@ import { ConnectionDialog } from "./components/ConnectionDialog";
 import { DataGrid } from "./components/DataGrid";
 import { emptyFilter, FilterBuilder, newCondition } from "./components/FilterBuilder";
 import * as api from "./lib/api";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, TableInfo, TableRowUpdate } from "./types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableInfo, TableRowUpdate } from "./types";
 
 type DialogState = { open: false } | { open: true; profile?: ConnectionProfile };
 type PendingHostKey = { profile: ConnectionProfile; fingerprint: string };
@@ -17,6 +17,7 @@ interface TableTab {
   offset: number;
   filter: FilterGroup;
   appliedFilter: FilterGroup;
+  sorts: SortRule[];
   drafts: Record<string, string>;
 }
 
@@ -144,12 +145,12 @@ export default function App() {
     const blank = emptyFilter();
     const last = savedFilters.find((item) => item.profileId === active.id && item.schema === table.schema && item.table === table.name && item.name === "__last__");
     const nextFilter = last?.root ?? blank;
-    const tab: TableTab = {id, table, columns: [], offset: 0, filter: nextFilter, appliedFilter: nextFilter, drafts: {}};
+    const tab: TableTab = {id, table, columns: [], offset: 0, filter: nextFilter, appliedFilter: nextFilter, sorts: [], drafts: {}};
     setTableTabs((current) => [...current, tab]); setActiveTableTabId(id); setSqlOpen(false); setLoading(true); setError("");
     try {
       const [nextColumns, nextPage] = await Promise.all([
         api.getColumns(active.id, table.schema, table.name),
-        api.queryTable(active.id, table.schema, table.name, nextFilter, 0),
+        api.queryTable(active.id, table.schema, table.name, nextFilter, [], 0),
       ]);
       patchTab(id, {columns: nextColumns, page: nextPage});
     } catch (reason) { setError(String(reason)); }
@@ -169,14 +170,14 @@ export default function App() {
     }
   }
 
-  async function applyFilter(nextFilter = activeTab?.filter, nextOffset = 0) {
-    if (!active || !activeTab || !nextFilter) return;
+  async function applyFilter(nextFilter = activeTab?.filter, nextOffset = 0, nextSorts = activeTab?.sorts) {
+    if (!active || !activeTab || !nextFilter || !nextSorts) return;
     if (Object.keys(activeTab.drafts).length > 0 && !confirm("未反映のセル変更を破棄してフィルターを実行しますか？")) return;
     const {id, table} = activeTab;
-    patchTab(id, {filter: nextFilter, appliedFilter: nextFilter, offset: nextOffset, drafts: {}});
+    patchTab(id, {filter: nextFilter, appliedFilter: nextFilter, sorts: nextSorts, offset: nextOffset, drafts: {}});
     setLoading(true); setError("");
     try {
-      const nextPage = await api.queryTable(active.id, table.schema, table.name, nextFilter, nextOffset);
+      const nextPage = await api.queryTable(active.id, table.schema, table.name, nextFilter, nextSorts, nextOffset);
       patchTab(id, {page: nextPage});
       const last: SavedFilter = {id: `${active.id}:${table.schema}:${table.name}:last`, profileId: active.id, schema: table.schema, table: table.name, name: "__last__", root: nextFilter};
       const next = [...savedFilters.filter((item) => item.id !== last.id), last]; setSavedFilters(next); api.persistSavedFilters(next);
@@ -186,11 +187,11 @@ export default function App() {
 
   async function applyTableUpdates(updates: TableRowUpdate[]) {
     if (!active || !activeTab) return;
-    const {id, table, appliedFilter, offset} = activeTab;
+    const {id, table, appliedFilter, sorts, offset} = activeTab;
     setLoading(true); setError("");
     try {
       const updated = await api.applyTableUpdates(active.id, table.schema, table.name, updates);
-      const nextPage = await api.queryTable(active.id, table.schema, table.name, appliedFilter, offset);
+      const nextPage = await api.queryTable(active.id, table.schema, table.name, appliedFilter, sorts, offset);
       patchTab(id, {page: nextPage, drafts: {}}); setStatus(`${updated}行の変更を反映しました`);
     } catch (reason) { setError(String(reason)); throw reason; }
     finally { setLoading(false); }

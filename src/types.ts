@@ -76,6 +76,15 @@ export interface QueryPage {
   sqlPreview: string;
 }
 
+export type SortDirection = "asc" | "desc";
+export type NullsOrder = "first" | "last";
+
+export interface SortRule {
+  column: string;
+  direction: SortDirection;
+  nulls: NullsOrder;
+}
+
 export interface TableRowUpdate {
   primaryKey: Record<string, unknown>;
   values: Record<string, unknown>;

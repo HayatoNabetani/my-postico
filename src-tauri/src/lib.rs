@@ -5,7 +5,7 @@ mod ssh;
 mod store;
 
 use db::ConnectedDb;
-use models::{ColumnInfo, ConnectionProfile, FilterNode, ProfileSecrets, QueryPage, SchemaInfo, TableInfo, TableRowUpdate};
+use models::{ColumnInfo, ConnectionProfile, FilterNode, ProfileSecrets, QueryPage, SchemaInfo, SortRule, TableInfo, TableRowUpdate};
 use std::{collections::HashMap, sync::Mutex};
 
 #[derive(Default)]
@@ -68,8 +68,8 @@ fn get_columns(state: tauri::State<AppState>, profile_id: String, schema: String
 }
 
 #[tauri::command]
-fn query_table(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, filter: FilterNode, offset: u32) -> Result<QueryPage, String> {
-    with_connection(&state, &profile_id, |db| db::query_table(&mut db.client, &schema, &table, &filter, offset))
+fn query_table(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, filter: FilterNode, sorts: Vec<SortRule>, offset: u32) -> Result<QueryPage, String> {
+    with_connection(&state, &profile_id, |db| db::query_table(&mut db.client, &schema, &table, &filter, &sorts, offset))
 }
 
 #[tauri::command]

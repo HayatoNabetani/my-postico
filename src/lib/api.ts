@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, TableInfo, TableRowUpdate } from "../types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableInfo, TableRowUpdate } from "../types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -32,8 +32,8 @@ export const disconnectProfile = (id: string) => invoke<void>("disconnect_profil
 export const listSchemas = (profileId: string) => invoke<SchemaInfo[]>("list_schemas", { profileId });
 export const listTables = (profileId: string, schema: string) => invoke<TableInfo[]>("list_tables", { profileId, schema });
 export const getColumns = (profileId: string, schema: string, table: string) => invoke<ColumnInfo[]>("get_columns", { profileId, schema, table });
-export const queryTable = (profileId: string, schema: string, table: string, filter: FilterGroup, offset: number) =>
-  invoke<QueryPage>("query_table", { profileId, schema, table, filter, offset });
+export const queryTable = (profileId: string, schema: string, table: string, filter: FilterGroup, sorts: SortRule[], offset: number) =>
+  invoke<QueryPage>("query_table", { profileId, schema, table, filter, sorts, offset });
 export const applyTableUpdates = (profileId: string, schema: string, table: string, updates: TableRowUpdate[]) =>
   invoke<number>("apply_table_updates", { profileId, schema, table, updates });
 export const executeSql = (profileId: string, sql: string) => invoke<QueryPage>("execute_sql", { profileId, sql });

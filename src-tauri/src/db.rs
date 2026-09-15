@@ -1,8 +1,9 @@
-use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, TableInfo, TableRowUpdate}, ssh::SshTunnel, store};
+use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, SortRule, TableInfo, TableRowUpdate}, ssh::SshTunnel, store};
 use native_tls::TlsConnector;
 use postgres::{Client, Config, NoTls, config::SslMode, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::error::Error;
 
 pub struct ConnectedDb {
@@ -109,11 +110,28 @@ pub fn columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
     }).collect())
 }
 
-pub fn query_table(client: &mut Client, schema: &str, table: &str, filter: &FilterNode, offset: u32) -> Result<QueryPage, String> {
+fn compile_order(columns: &[ColumnInfo], sorts: &[SortRule]) -> Result<String, String> {
+    let available = columns.iter().map(|column| column.name.as_str()).collect::<HashSet<_>>();
+    let mut selected = HashSet::new();
+    let mut parts = Vec::new();
+    for sort in sorts {
+        if !available.contains(sort.column.as_str()) { return Err(format!("ソート対象のカラム「{}」は現在のテーブルに存在しません", sort.column)); }
+        if !selected.insert(sort.column.as_str()) { return Err(format!("カラム「{}」が複数回ソートに指定されています", sort.column)); }
+        let direction = match sort.direction.as_str() { "asc" => "ASC", "desc" => "DESC", _ => return Err("不正なソート方向です".into()) };
+        let nulls = match sort.nulls.as_str() { "first" => "FIRST", "last" => "LAST", _ => return Err("不正なNULLの並び順です".into()) };
+        parts.push(format!("{} {direction} NULLS {nulls}", quote_identifier(&sort.column)));
+    }
+    for column in columns.iter().filter(|column| column.primary_key && !selected.contains(column.name.as_str())) {
+        parts.push(format!("{} ASC", quote_identifier(&column.name)));
+    }
+    if parts.is_empty() { parts.push("ctid".into()); }
+    Ok(parts.join(", "))
+}
+
+pub fn query_table(client: &mut Client, schema: &str, table: &str, filter: &FilterNode, sorts: &[SortRule], offset: u32) -> Result<QueryPage, String> {
     let columns = columns(client, schema, table)?;
     let compiled = filters::compile(filter, &columns)?;
-    let order = columns.iter().filter(|c| c.primary_key).map(|c| quote_identifier(&c.name)).collect::<Vec<_>>();
-    let order_sql = if order.is_empty() { "ctid".into() } else { order.join(", ") };
+    let order_sql = compile_order(&columns, sorts)?;
     let qualified = format!("{}.{}", quote_identifier(schema), quote_identifier(table));
     // Fetch one extra row to determine whether a next page exists. This avoids
     // an expensive COUNT(*) while keeping the visible page capped at 100 rows.
@@ -189,4 +207,37 @@ pub fn execute_sql(client: &mut Client, sql: &str, read_only: bool) -> Result<Qu
     let has_more = objects.len() > 500; if has_more { objects.pop(); }
     let column_names = objects.first().map(|item| item.keys().cloned().collect()).unwrap_or_default();
     Ok(QueryPage { columns: column_names, rows: objects, has_more, sql_preview: trimmed.into() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_columns() -> Vec<ColumnInfo> {
+        vec![
+            ColumnInfo { name: "id".into(), data_type: "integer".into(), nullable: false, primary_key: true, foreign_key: None },
+            ColumnInfo { name: "display name".into(), data_type: "text".into(), nullable: true, primary_key: false, foreign_key: None },
+        ]
+    }
+
+    #[test]
+    fn compiles_validated_sort_with_primary_key_tiebreaker() {
+        let sorts = vec![SortRule { column: "display name".into(), direction: "desc".into(), nulls: "last".into() }];
+        assert_eq!(compile_order(&test_columns(), &sorts).unwrap(), "\"display name\" DESC NULLS LAST, \"id\" ASC");
+    }
+
+    #[test]
+    fn rejects_unknown_sort_columns() {
+        let sorts = vec![SortRule { column: "missing".into(), direction: "asc".into(), nulls: "last".into() }];
+        assert!(compile_order(&test_columns(), &sorts).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_sort_columns() {
+        let sorts = vec![
+            SortRule { column: "id".into(), direction: "asc".into(), nulls: "last".into() },
+            SortRule { column: "id".into(), direction: "desc".into(), nulls: "first".into() },
+        ];
+        assert!(compile_order(&test_columns(), &sorts).is_err());
+    }
 }
