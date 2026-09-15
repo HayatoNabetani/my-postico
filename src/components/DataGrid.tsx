@@ -26,6 +26,20 @@ function display(value: unknown): string {
   return String(value);
 }
 
+function spreadsheetCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[\t\r\n"]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return `'${text.replace(/'/g, "''")}'`;
+}
+
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 
 export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange }: Props) {
@@ -56,9 +70,21 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
   const editable = Boolean(onApplyChanges) && primaryKeys.length > 0;
   const pendingRows = new Set(Object.keys(drafts).map((key) => Number(key.split("\u0000", 1)[0]))).size;
 
-  function copyColumnValues(column: string) {
-    const values = page!.rows.map((row, index) => drafts[cellKey(index, column)] ?? display(row[column]));
-    void navigator.clipboard.writeText(values.join("\n"));
+  function visibleColumnValues(column: string) {
+    return page!.rows.map((row, index) => {
+      const draft = drafts[cellKey(index, column)];
+      return draft === undefined ? row[column] : draft === "NULL" ? null : draft;
+    });
+  }
+
+  function copyColumnValues(column: string, format: "json" | "spreadsheet" | "sqlIn") {
+    const values = visibleColumnValues(column);
+    const text = format === "json"
+      ? JSON.stringify(values)
+      : format === "spreadsheet"
+        ? values.map(spreadsheetCell).join("\n")
+        : (values.length > 0 ? `(${values.map(sqlLiteral).join(", ")})` : "(NULL)");
+    void navigator.clipboard.writeText(text);
     setColumnMenu(undefined);
   }
 
@@ -111,7 +137,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
           const foreignKey = meta?.foreignKey;
           const sortIndex = sortRules.findIndex((item) => item.column === column);
           const sort = sortRules[sortIndex];
-          return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 305))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <b className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column}`}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</b>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
+          return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 390))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <b className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column}`}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</b>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
         })}</tr></thead>
         <tbody>{page.rows.map((row, index) => <tr key={index}><td className="row-number">{offset + index + 1}</td>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
@@ -127,7 +153,10 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     </div>
     {columnMenu && <div className="column-context-menu" role="menu" aria-label={`${columnMenu.column} カラムの操作`} style={{left: columnMenu.x, top: columnMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(columnMenu.column); setColumnMenu(undefined); }}><Copy size={14}/>カラム名をコピー</button>
-      <button role="menuitem" onClick={() => copyColumnValues(columnMenu.column)}><Copy size={14}/>表示中の値をコピー</button>
+      <div className="menu-label">表示中の値をコピー</div>
+      <button role="menuitem" onClick={() => copyColumnValues(columnMenu.column, "json")}><Copy size={14}/>JSON配列</button>
+      <button role="menuitem" onClick={() => copyColumnValues(columnMenu.column, "spreadsheet")}><Copy size={14}/>スプレッドシート（1列）</button>
+      <button role="menuitem" onClick={() => copyColumnValues(columnMenu.column, "sqlIn")}><Copy size={14}/>SQL IN句<span>（…）</span></button>
       <div className="menu-separator"/>
       <div className="menu-label">カラムをソート</div>
       <button role="menuitem" disabled={!onSortChange} className={sortRules.some((item) => item.column === columnMenu.column && item.direction === "asc" && item.nulls === "last") ? "active" : ""} onClick={(event) => sortColumn(columnMenu.column, "asc", "last", event.altKey)}><ArrowUp size={14}/>昇順<span>NULLは末尾</span></button>

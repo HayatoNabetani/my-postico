@@ -348,6 +348,8 @@ body,
   position: fixed;
   z-index: 50;
   width: 242px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   padding: 6px;
   border: 1px solid #4a4f59;
   border-radius: 10px;
