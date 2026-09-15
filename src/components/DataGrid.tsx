@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, FilterX, KeyRound, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, Copy, Download, FilterX, KeyRound, RotateCcw } from "lucide-react";
+import type { ExportFormat } from "../lib/export";
 import type { ColumnInfo, ForeignKeyInfo, NullsOrder, QueryPage, SortDirection, SortRule, TableRowUpdate } from "../types";
 
 interface Props {
@@ -17,10 +18,12 @@ interface Props {
   onSortChange?: (sorts: SortRule[]) => void;
   onOpenForeignTable?: (foreignKey: ForeignKeyInfo) => void;
   onFollowForeignKey?: (foreignKey: ForeignKeyInfo, value: unknown) => void;
+  onExport?: (format: ExportFormat) => Promise<void>;
 }
 
 interface EditingCell { key: string; value: string }
 interface ColumnMenu { column: string; x: number; y: number }
+interface ExportMenu { x: number; y: number }
 
 function display(value: unknown): string {
   if (value === null) return "NULL";
@@ -44,10 +47,11 @@ function sqlLiteral(value: unknown): string {
 
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 
-export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange, onOpenForeignTable, onFollowForeignKey }: Props) {
+export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange, onOpenForeignTable, onFollowForeignKey, onExport }: Props) {
   const [editing, setEditing] = useState<EditingCell>();
   const [applying, setApplying] = useState(false);
   const [columnMenu, setColumnMenu] = useState<ColumnMenu>();
+  const [exportMenu, setExportMenu] = useState<ExportMenu>();
 
   useEffect(() => {
     if (!columnMenu) return;
@@ -64,6 +68,18 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [columnMenu]);
+
+  useEffect(() => {
+    if (!exportMenu) return;
+    const close = () => setExportMenu(undefined);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [exportMenu]);
 
   if (loading && !page) return <div className="empty-state"><div className="spinner"/><p>データを取得しています</p></div>;
   if (!page) return <div className="empty-state"><FilterX size={36}/><p>左側からテーブルを選択してください</p></div>;
@@ -152,7 +168,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
         })}</tr>)}</tbody>
       </table>
       {page.rows.length === 0 && <div className="no-rows">該当する行がありません</div>}
-      <div className="sql-preview"><span>SQL</span><code>{page.sqlPreview}</code><button onClick={() => navigator.clipboard.writeText(page.sqlPreview)}><Copy size={13}/></button>{(onPrevious || onNext) && <div className="pager"><button disabled={loading || offset === 0} onClick={onPrevious}>前へ</button><span>{offset + 1}–{offset + page.rows.length}</span><button disabled={loading || !page.hasMore} onClick={onNext}>次へ</button></div>}</div>
+      <div className="sql-preview"><span>SQL</span><code>{page.sqlPreview}</code><div className="result-actions"><button title="SQLをコピー" onClick={() => navigator.clipboard.writeText(page.sqlPreview)}><Copy size={13}/></button>{onExport && <div className="export-actions" onPointerDown={(event) => event.stopPropagation()}><button className="export-button" onClick={(event) => { if (exportMenu) { setExportMenu(undefined); return; } const rect = event.currentTarget.getBoundingClientRect(); setExportMenu({x: Math.max(8, Math.min(rect.right - 210, window.innerWidth - 218)), y: rect.bottom + 86 < window.innerHeight ? rect.bottom + 4 : rect.top - 86}); }}><Download size={13}/>エクスポート<ChevronDown size={11}/></button>{exportMenu && <div className="export-menu" role="menu" style={{left: exportMenu.x, top: exportMenu.y}}><button role="menuitem" onClick={() => { setExportMenu(undefined); void onExport("csv"); }}>CSV<span>Excel・スプレッドシート向け</span></button><button role="menuitem" onClick={() => { setExportMenu(undefined); void onExport("json"); }}>JSON<span>オブジェクト配列</span></button></div>}</div>}</div>{(onPrevious || onNext) && <div className="pager"><button disabled={loading || offset === 0} onClick={onPrevious}>前へ</button><span>{offset + 1}–{offset + page.rows.length}</span><button disabled={loading || !page.hasMore} onClick={onNext}>次へ</button></div>}</div>
     </div>
     {columnMenu && <div className="column-context-menu" role="menu" aria-label={`${columnMenu.column} カラムの操作`} style={{left: columnMenu.x, top: columnMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(columnMenu.column); setColumnMenu(undefined); }}><Copy size={14}/>カラム名をコピー</button>

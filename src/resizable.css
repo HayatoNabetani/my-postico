@@ -110,6 +110,78 @@ body,
   overflow: hidden;
 }
 
+.sql-preview code {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sql-preview .result-actions button {
+  margin-left: 0;
+}
+
+.export-actions {
+  position: relative;
+}
+
+.sql-preview .export-button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid #343944;
+  border-radius: 5px;
+  background: #20232a;
+  color: #aeb3bc;
+}
+
+.export-menu {
+  position: fixed;
+  z-index: 12;
+  width: 210px;
+  padding: 5px;
+  border: 1px solid #454a54;
+  border-radius: 8px;
+  background: rgba(30, 33, 38, .98);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .5);
+  backdrop-filter: blur(12px);
+}
+
+.sql-preview .export-menu button {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: #e0e3e8;
+  text-align: left;
+}
+
+.sql-preview .export-menu button:hover {
+  background: #2b66c4;
+  color: white;
+}
+
+.sql-preview .export-menu button span {
+  color: #7f8691;
+  font-size: 8px;
+  font-weight: 400;
+}
+
+.sql-preview .export-menu button:hover span {
+  color: #dbe7fb;
+}
+
 .pending-changes {
   flex: none;
   min-height: 36px;
