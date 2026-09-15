@@ -92,6 +92,23 @@ export interface TableRowUpdate {
   values: Record<string, unknown>;
 }
 
+export interface PendingTableRow {
+  id: string;
+  values: Record<string, string>;
+}
+
+export interface TableChanges {
+  updates: TableRowUpdate[];
+  inserts: Record<string, unknown>[];
+  deletes: Record<string, unknown>[];
+}
+
+export interface TableChangeResult {
+  inserted: number;
+  updated: number;
+  deleted: number;
+}
+
 export interface SavedFilter {
   id: string;
   profileId: string;

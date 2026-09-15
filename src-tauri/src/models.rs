@@ -102,3 +102,19 @@ pub struct TableRowUpdate {
     pub primary_key: serde_json::Map<String, serde_json::Value>,
     pub values: serde_json::Map<String, serde_json::Value>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableChanges {
+    pub updates: Vec<TableRowUpdate>,
+    pub inserts: Vec<serde_json::Map<String, serde_json::Value>>,
+    pub deletes: Vec<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableChangeResult {
+    pub inserted: u64,
+    pub updated: u64,
+    pub deleted: u64,
+}

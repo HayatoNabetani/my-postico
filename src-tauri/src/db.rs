@@ -1,4 +1,4 @@
-use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, SortRule, TableInfo, TableRowUpdate}, ssh::SshTunnel, store};
+use crate::{filters, models::{ColumnInfo, ConnectionProfile, FilterNode, ForeignKeyInfo, QueryPage, SchemaInfo, SortRule, TableChangeResult, TableChanges, TableInfo}, ssh::SshTunnel, store};
 use native_tls::TlsConnector;
 use postgres::{Client, Config, NoTls, config::SslMode, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
@@ -188,18 +188,50 @@ fn leading_sql_keyword(sql: &str) -> &str {
     &sql[start..index]
 }
 
-pub fn apply_table_updates(client: &mut Client, schema: &str, table: &str, updates: Vec<TableRowUpdate>, read_only: bool) -> Result<u64, String> {
+pub fn apply_table_changes(client: &mut Client, schema: &str, table: &str, changes: TableChanges, read_only: bool) -> Result<TableChangeResult, String> {
     if read_only { return Err("読み取り専用接続ではテーブルを編集できません".into()); }
-    if updates.is_empty() { return Ok(0); }
+    if changes.updates.is_empty() && changes.inserts.is_empty() && changes.deletes.is_empty() {
+        return Ok(TableChangeResult { inserted: 0, updated: 0, deleted: 0 });
+    }
     let columns = columns(client, schema, table)?;
     let primary_keys = columns.iter().filter(|column| column.primary_key).collect::<Vec<_>>();
-    if primary_keys.is_empty() { return Err("主キーがないテーブルは安全に編集できません".into()); }
+    if primary_keys.is_empty() && (!changes.updates.is_empty() || !changes.deletes.is_empty()) {
+        return Err("主キーがないテーブルは安全に更新・削除できません".into());
+    }
     let column_lookup = columns.iter().map(|column| (column.name.as_str(), column)).collect::<std::collections::HashMap<_, _>>();
     let qualified = format!("{}.{}", quote_identifier(schema), quote_identifier(table));
-    let mut transaction = client.transaction().map_err(|e| format!("更新トランザクションを開始できません: {e}"))?;
+    let mut transaction = client.transaction().map_err(|e| postgres_error("変更トランザクションを開始できません", &e))?;
+    let mut inserted = 0;
     let mut updated = 0;
+    let mut deleted = 0;
 
-    for update in updates {
+    for values in changes.inserts {
+        let affected = if values.is_empty() {
+            transaction.execute(&format!("INSERT INTO {qualified} DEFAULT VALUES"), &[])
+        } else {
+            let mut params = Vec::<String>::new();
+            let mut names = Vec::new();
+            let mut placeholders = Vec::new();
+            for (name, value) in &values {
+                let column = column_lookup.get(name.as_str()).ok_or_else(|| format!("カラム「{name}」は現在のテーブルに存在しません"))?;
+                names.push(quote_identifier(name));
+                if value.is_null() {
+                    if !column.nullable { return Err(format!("カラム「{name}」はNULLにできません")); }
+                    placeholders.push("NULL".into());
+                } else {
+                    params.push(editable_value(value)?);
+                    placeholders.push(filters::typed_parameter(params.len(), &column.data_type));
+                }
+            }
+            let sql = format!("INSERT INTO {qualified} ({}) VALUES ({})", names.join(", "), placeholders.join(", "));
+            let refs = params.iter().map(|value| value as &(dyn ToSql + Sync)).collect::<Vec<_>>();
+            transaction.execute(&sql, &refs)
+        }.map_err(|e| postgres_error("行追加エラー", &e))?;
+        if affected != 1 { return Err(format!("追加対象が1行になりませんでした（{affected}行）")); }
+        inserted += affected;
+    }
+
+    for update in changes.updates {
         if update.values.is_empty() { continue; }
         let mut params = Vec::<String>::new();
         let mut assignments = Vec::new();
@@ -222,12 +254,27 @@ pub fn apply_table_updates(client: &mut Client, schema: &str, table: &str, updat
         }
         let sql = format!("UPDATE {qualified} SET {} WHERE {}", assignments.join(", "), predicates.join(" AND "));
         let refs = params.iter().map(|value| value as &(dyn ToSql + Sync)).collect::<Vec<_>>();
-        let affected = transaction.execute(&sql, &refs).map_err(|e| format!("テーブル更新エラー: {e}"))?;
+        let affected = transaction.execute(&sql, &refs).map_err(|e| postgres_error("行更新エラー", &e))?;
         if affected != 1 { return Err(format!("更新対象が1行に特定できませんでした（{affected}行）")); }
         updated += affected;
     }
-    transaction.commit().map_err(|e| format!("更新を確定できません: {e}"))?;
-    Ok(updated)
+
+    for primary_key in changes.deletes {
+        let mut params = Vec::<String>::new();
+        let mut predicates = Vec::new();
+        for column in &primary_keys {
+            let value = primary_key.get(&column.name).ok_or_else(|| format!("主キー「{}」の値がありません", column.name))?;
+            params.push(editable_value(value).map_err(|_| format!("主キー「{}」がNULLです", column.name))?);
+            predicates.push(format!("{} = {}", quote_identifier(&column.name), filters::typed_parameter(params.len(), &column.data_type)));
+        }
+        let sql = format!("DELETE FROM {qualified} WHERE {}", predicates.join(" AND "));
+        let refs = params.iter().map(|value| value as &(dyn ToSql + Sync)).collect::<Vec<_>>();
+        let affected = transaction.execute(&sql, &refs).map_err(|e| postgres_error("行削除エラー", &e))?;
+        if affected != 1 { return Err(format!("削除対象が1行に特定できませんでした（{affected}行）")); }
+        deleted += affected;
+    }
+    transaction.commit().map_err(|e| postgres_error("変更を確定できません", &e))?;
+    Ok(TableChangeResult { inserted, updated, deleted })
 }
 
 pub fn execute_sql(client: &mut Client, sql: &str, read_only: bool) -> Result<QueryPage, String> {

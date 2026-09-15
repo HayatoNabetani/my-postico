@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableInfo, TableRowUpdate } from "../types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableChangeResult, TableChanges, TableInfo } from "../types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -34,8 +34,8 @@ export const listTables = (profileId: string, schema: string) => invoke<TableInf
 export const getColumns = (profileId: string, schema: string, table: string) => invoke<ColumnInfo[]>("get_columns", { profileId, schema, table });
 export const queryTable = (profileId: string, schema: string, table: string, filter: FilterGroup, sorts: SortRule[], offset: number) =>
   invoke<QueryPage>("query_table", { profileId, schema, table, filter, sorts, offset });
-export const applyTableUpdates = (profileId: string, schema: string, table: string, updates: TableRowUpdate[]) =>
-  invoke<number>("apply_table_updates", { profileId, schema, table, updates });
+export const applyTableChanges = (profileId: string, schema: string, table: string, changes: TableChanges) =>
+  invoke<TableChangeResult>("apply_table_changes", { profileId, schema, table, changes });
 export const executeSql = (profileId: string, sql: string) => invoke<QueryPage>("execute_sql", { profileId, sql });
 export const exportResults = (fileName: string, format: "csv" | "json", contents: string) =>
   invoke<string | null>("export_results", { fileName, format, contents });
