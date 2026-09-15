@@ -5,7 +5,7 @@ import { DataGrid } from "./components/DataGrid";
 import { emptyFilter, FilterBuilder, newCondition } from "./components/FilterBuilder";
 import * as api from "./lib/api";
 import { statementForExecution } from "./lib/sql";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableInfo, TableRowUpdate } from "./types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ForeignKeyInfo, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableInfo, TableRowUpdate } from "./types";
 
 type DialogState = { open: false } | { open: true; profile?: ConnectionProfile };
 type PendingHostKey = { profile: ConnectionProfile; fingerprint: string };
@@ -140,13 +140,14 @@ export default function App() {
     setConnected(false); setActive(undefined); setSchemas([]); setTables({}); setTableTabs([]); setActiveTableTabId(undefined); setSqlPage(undefined); setObjectSearch(""); setStatus("切断しました");
   }
 
-  async function openTable(table: TableInfo) {
+  async function openTable(table: TableInfo, options?: {filter?: FilterGroup; forceNew?: boolean}) {
     if (!active) return;
-    const id = `${table.schema}.${table.name}`;
-    if (tableTabs.some((tab) => tab.id === id)) { setActiveTableTabId(id); setSqlOpen(false); return; }
+    const baseId = `${table.schema}.${table.name}`;
+    const id = options?.forceNew ? `${baseId}:${crypto.randomUUID()}` : baseId;
+    if (!options?.forceNew && tableTabs.some((tab) => tab.id === id)) { setActiveTableTabId(id); setSqlOpen(false); return; }
     const blank = emptyFilter();
     const last = savedFilters.find((item) => item.profileId === active.id && item.schema === table.schema && item.table === table.name && item.name === "__last__");
-    const nextFilter = last?.root ?? blank;
+    const nextFilter = options?.filter ?? last?.root ?? blank;
     const tab: TableTab = {id, table, columns: [], offset: 0, filter: nextFilter, appliedFilter: nextFilter, sorts: [], drafts: {}};
     setTableTabs((current) => [...current, tab]); setActiveTableTabId(id); setSqlOpen(false); setLoading(true); setError("");
     try {
@@ -157,6 +158,23 @@ export default function App() {
       patchTab(id, {columns: nextColumns, page: nextPage});
     } catch (reason) { setError(String(reason)); }
     finally { setLoading(false); }
+  }
+
+  function referencedTable(foreignKey: ForeignKeyInfo): TableInfo {
+    return tables[foreignKey.schema]?.find((table) => table.name === foreignKey.table)
+      ?? {schema: foreignKey.schema, name: foreignKey.table, kind: "table"};
+  }
+
+  function openForeignTable(foreignKey: ForeignKeyInfo) {
+    void openTable(referencedTable(foreignKey), {forceNew: true});
+  }
+
+  function followForeignKey(foreignKey: ForeignKeyInfo, value: unknown) {
+    const condition = newCondition(foreignKey.column);
+    condition.operator = value === null ? "isNull" : "eq";
+    condition.value = value === null ? "" : String(value);
+    const filter = {...emptyFilter(), children: [condition]};
+    void openTable(referencedTable(foreignKey), {filter, forceNew: true});
   }
 
   function closeTableTab(id: string) {
@@ -310,7 +328,7 @@ export default function App() {
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
       {sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || loading} onClick={() => void runSql()}><Play size={13}/>{loading ? "実行中" : "実行"}</button><div className="query-actions"><select value={selectedQueryId} onChange={(event) => { const id = event.target.value; setSelectedQueryId(id); const selected = savedQueries.find((item) => item.id === id); if (selected) setSql(selected.sql); }}><option value="">保存済みクエリー</option>{savedQueries.map((query) => <option value={query.id} key={query.id}>{query.name}</option>)}</select><button onClick={saveQuery}><Save size={13}/>{selectedQueryId ? "上書き保存" : "名前を付けて保存"}</button><button className="mini-icon danger" disabled={!selectedQueryId} title="保存済みクエリーを削除" onClick={deleteQuery}><Trash2 size={13}/></button></div></div><textarea ref={sqlEditorRef} spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={loading} onQuickFilter={() => undefined}/></div> : activeTab ? <>
         <FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/>
-        <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
+        <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onOpenForeignTable={openForeignTable} onFollowForeignKey={followForeignKey} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
       </> : <div className="empty-state"><Table2 size={36}/><p>左側からテーブルを選択してください</p></div>}
     </main>
     {dialog.open && <ConnectionDialog initial={dialog.profile} onClose={() => setDialog({open: false})} onSave={saveProfile}/>} 

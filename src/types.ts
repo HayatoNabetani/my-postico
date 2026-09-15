@@ -33,16 +33,18 @@ export interface ProfileSecrets {
 export interface SchemaInfo { name: string }
 export interface TableInfo { schema: string; name: string; kind: "table" | "view" }
 
+export interface ForeignKeyInfo {
+  schema: string;
+  table: string;
+  column: string;
+}
+
 export interface ColumnInfo {
   name: string;
   dataType: string;
   nullable: boolean;
   primaryKey: boolean;
-  foreignKey?: {
-    schema: string;
-    table: string;
-    column: string;
-  };
+  foreignKey?: ForeignKeyInfo;
 }
 
 export type FilterOperator =

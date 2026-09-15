@@ -313,6 +313,13 @@ body,
 .foreign-key {
   background: #243750;
   color: #8fc5ff;
+  border: 0;
+  cursor: pointer;
+}
+
+.foreign-key:hover {
+  background: #315176;
+  color: #c4e2ff;
 }
 
 .data-grid th.foreign-key-column {
@@ -322,6 +329,25 @@ body,
 .data-grid td.foreign-key-cell {
   color: #9dcaff;
   background: #14202b;
+}
+
+.foreign-key-link {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: #47749c;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.foreign-key-link:hover {
+  color: #d2eaff;
+  text-decoration-color: #9dcaff;
 }
 
 .data-grid th:not(.row-number) {

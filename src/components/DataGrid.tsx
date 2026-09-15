@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Check, Copy, FilterX, KeyRound, RotateCcw } from "lucide-react";
-import type { ColumnInfo, NullsOrder, QueryPage, SortDirection, SortRule, TableRowUpdate } from "../types";
+import type { ColumnInfo, ForeignKeyInfo, NullsOrder, QueryPage, SortDirection, SortRule, TableRowUpdate } from "../types";
 
 interface Props {
   page?: QueryPage;
@@ -15,6 +15,8 @@ interface Props {
   onDraftsChange?: (drafts: Record<string, string>) => void;
   sortRules?: SortRule[];
   onSortChange?: (sorts: SortRule[]) => void;
+  onOpenForeignTable?: (foreignKey: ForeignKeyInfo) => void;
+  onFollowForeignKey?: (foreignKey: ForeignKeyInfo, value: unknown) => void;
 }
 
 interface EditingCell { key: string; value: string }
@@ -42,7 +44,7 @@ function sqlLiteral(value: unknown): string {
 
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 
-export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange }: Props) {
+export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange, onOpenForeignTable, onFollowForeignKey }: Props) {
   const [editing, setEditing] = useState<EditingCell>();
   const [applying, setApplying] = useState(false);
   const [columnMenu, setColumnMenu] = useState<ColumnMenu>();
@@ -137,15 +139,16 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
           const foreignKey = meta?.foreignKey;
           const sortIndex = sortRules.findIndex((item) => item.column === column);
           const sort = sortRules[sortIndex];
-          return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 390))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <b className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column}`}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</b>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
+          return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 390))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <button className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} を新しいタブで開く`} onClick={(event) => { event.stopPropagation(); onOpenForeignTable?.(foreignKey); }}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</button>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
         })}</tr></thead>
         <tbody>{page.rows.map((row, index) => <tr key={index}><td className="row-number">{offset + index + 1}</td>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
+          const foreignKey = meta?.foreignKey;
           const key = cellKey(index, column);
           const pending = key in drafts;
           const isEditing = editing?.key === key;
           const classes = [row[column] === null && !pending ? "null-cell" : "", meta?.foreignKey ? "foreign-key-cell" : "", pending ? "pending-cell" : "", isEditing ? "editing-cell" : ""].filter(Boolean).join(" ");
-          return <td key={column} className={classes} onDoubleClick={() => editable && setEditing({key, value: drafts[key] ?? display(row[column])})} onContextMenu={(event) => { event.preventDefault(); onQuickFilter(column, row[column]); }} title={editable ? "ダブルクリックで編集・右クリックで絞り込み（NULLと入力するとNULLを設定）" : primaryKeys.length === 0 && columns.length ? "主キーがないため編集できません" : "右クリックでこの値に絞り込み"}>{isEditing ? <input autoFocus value={editing?.value ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setEditing({key, value: event.target.value})} onBlur={finishEditing} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditing(undefined); }}/> : (pending ? drafts[key] : display(row[column]))}</td>;
+          return <td key={column} className={classes} onDoubleClick={() => editable && setEditing({key, value: drafts[key] ?? display(row[column])})} onContextMenu={(event) => { event.preventDefault(); onQuickFilter(column, row[column]); }} title={editable ? "ダブルクリックで編集・右クリックで絞り込み（NULLと入力するとNULLを設定）" : primaryKeys.length === 0 && columns.length ? "主キーがないため編集できません" : "右クリックでこの値に絞り込み"}>{isEditing ? <input autoFocus value={editing?.value ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setEditing({key, value: event.target.value})} onBlur={finishEditing} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditing(undefined); }}/> : foreignKey && row[column] !== null && !pending && onFollowForeignKey ? <button className="foreign-key-link" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} の該当行を開く`} onClick={() => onFollowForeignKey(foreignKey, row[column])}>{display(row[column])}</button> : (pending ? drafts[key] : display(row[column]))}</td>;
         })}</tr>)}</tbody>
       </table>
       {page.rows.length === 0 && <div className="no-rows">該当する行がありません</div>}
