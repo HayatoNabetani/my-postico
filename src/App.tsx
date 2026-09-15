@@ -197,6 +197,19 @@ export default function App() {
     finally { setLoading(false); }
   }
 
+  async function applySort(nextSorts: SortRule[]) {
+    if (!active || !activeTab) return;
+    if (Object.keys(activeTab.drafts).length > 0 && !confirm("未反映のセル変更を破棄してソートしますか？")) return;
+    const {id, table, appliedFilter} = activeTab;
+    patchTab(id, {sorts: nextSorts, offset: 0, drafts: {}});
+    setLoading(true); setError("");
+    try {
+      const nextPage = await api.queryTable(active.id, table.schema, table.name, appliedFilter, nextSorts, 0);
+      patchTab(id, {page: nextPage});
+    } catch (reason) { setError(String(reason)); }
+    finally { setLoading(false); }
+  }
+
   function saveCurrentFilter() {
     if (!active || !activeTab) return;
     const name = prompt("フィルター名"); if (!name?.trim()) return;
@@ -291,7 +304,7 @@ export default function App() {
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
       {sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || loading} onClick={() => void runSql()}><Play size={13}/>{loading ? "実行中" : "実行"}</button><div className="query-actions"><select value={selectedQueryId} onChange={(event) => { const id = event.target.value; setSelectedQueryId(id); const selected = savedQueries.find((item) => item.id === id); if (selected) setSql(selected.sql); }}><option value="">保存済みクエリー</option>{savedQueries.map((query) => <option value={query.id} key={query.id}>{query.name}</option>)}</select><button onClick={saveQuery}><Save size={13}/>{selectedQueryId ? "上書き保存" : "名前を付けて保存"}</button><button className="mini-icon danger" disabled={!selectedQueryId} title="保存済みクエリーを削除" onClick={deleteQuery}><Trash2 size={13}/></button></div></div><textarea spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={loading} onQuickFilter={() => undefined}/></div> : activeTab ? <>
         <FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/>
-        <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
+        <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
       </> : <div className="empty-state"><Table2 size={36}/><p>左側からテーブルを選択してください</p></div>}
     </main>
     {dialog.open && <ConnectionDialog initial={dialog.profile} onClose={() => setDialog({open: false})} onSave={saveProfile}/>} 

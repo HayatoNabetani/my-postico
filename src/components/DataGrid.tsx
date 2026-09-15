@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Check, Copy, FilterX, KeyRound, RotateCcw } from "lucide-react";
-import type { ColumnInfo, QueryPage, TableRowUpdate } from "../types";
+import { useEffect, useState } from "react";
+import { ArrowDown, ArrowUp, Check, Copy, FilterX, KeyRound, RotateCcw } from "lucide-react";
+import type { ColumnInfo, NullsOrder, QueryPage, SortDirection, SortRule, TableRowUpdate } from "../types";
 
 interface Props {
   page?: QueryPage;
@@ -13,9 +13,12 @@ interface Props {
   onApplyChanges?: (updates: TableRowUpdate[]) => Promise<void>;
   drafts?: Record<string, string>;
   onDraftsChange?: (drafts: Record<string, string>) => void;
+  sortRules?: SortRule[];
+  onSortChange?: (sorts: SortRule[]) => void;
 }
 
 interface EditingCell { key: string; value: string }
+interface ColumnMenu { column: string; x: number; y: number }
 
 function display(value: unknown): string {
   if (value === null) return "NULL";
@@ -25,15 +28,46 @@ function display(value: unknown): string {
 
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 
-export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange }: Props) {
+export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange }: Props) {
   const [editing, setEditing] = useState<EditingCell>();
   const [applying, setApplying] = useState(false);
+  const [columnMenu, setColumnMenu] = useState<ColumnMenu>();
+
+  useEffect(() => {
+    if (!columnMenu) return;
+    const close = () => setColumnMenu(undefined);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [columnMenu]);
+
   if (loading && !page) return <div className="empty-state"><div className="spinner"/><p>データを取得しています</p></div>;
   if (!page) return <div className="empty-state"><FilterX size={36}/><p>左側からテーブルを選択してください</p></div>;
 
   const primaryKeys = columns.filter((column) => column.primaryKey);
   const editable = Boolean(onApplyChanges) && primaryKeys.length > 0;
   const pendingRows = new Set(Object.keys(drafts).map((key) => Number(key.split("\u0000", 1)[0]))).size;
+
+  function copyColumnValues(column: string) {
+    const values = page!.rows.map((row, index) => drafts[cellKey(index, column)] ?? display(row[column]));
+    void navigator.clipboard.writeText(values.join("\n"));
+    setColumnMenu(undefined);
+  }
+
+  function sortColumn(column: string, direction: SortDirection, nulls: NullsOrder, additive: boolean) {
+    if (!onSortChange) return;
+    const rule = {column, direction, nulls};
+    onSortChange(additive ? [...sortRules.filter((item) => item.column !== column), rule] : [rule]);
+    setColumnMenu(undefined);
+  }
 
   function finishEditing() {
     if (!editing) return;
@@ -75,7 +109,9 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
       <table className="data-grid"><thead><tr><th className="row-number">#</th>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
           const foreignKey = meta?.foreignKey;
-          return <th key={column} className={foreignKey ? "foreign-key-column" : ""}><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <b className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column}`}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</b>}</span></div><small>{meta?.dataType}</small></th>;
+          const sortIndex = sortRules.findIndex((item) => item.column === column);
+          const sort = sortRules[sortIndex];
+          return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 305))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <b className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column}`}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</b>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
         })}</tr></thead>
         <tbody>{page.rows.map((row, index) => <tr key={index}><td className="row-number">{offset + index + 1}</td>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
@@ -89,5 +125,17 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
       {page.rows.length === 0 && <div className="no-rows">該当する行がありません</div>}
       <div className="sql-preview"><span>SQL</span><code>{page.sqlPreview}</code><button onClick={() => navigator.clipboard.writeText(page.sqlPreview)}><Copy size={13}/></button>{(onPrevious || onNext) && <div className="pager"><button disabled={loading || offset === 0} onClick={onPrevious}>前へ</button><span>{offset + 1}–{offset + page.rows.length}</span><button disabled={loading || !page.hasMore} onClick={onNext}>次へ</button></div>}</div>
     </div>
+    {columnMenu && <div className="column-context-menu" role="menu" aria-label={`${columnMenu.column} カラムの操作`} style={{left: columnMenu.x, top: columnMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
+      <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(columnMenu.column); setColumnMenu(undefined); }}><Copy size={14}/>カラム名をコピー</button>
+      <button role="menuitem" onClick={() => copyColumnValues(columnMenu.column)}><Copy size={14}/>表示中の値をコピー</button>
+      <div className="menu-separator"/>
+      <div className="menu-label">カラムをソート</div>
+      <button role="menuitem" disabled={!onSortChange} className={sortRules.some((item) => item.column === columnMenu.column && item.direction === "asc" && item.nulls === "last") ? "active" : ""} onClick={(event) => sortColumn(columnMenu.column, "asc", "last", event.altKey)}><ArrowUp size={14}/>昇順<span>NULLは末尾</span></button>
+      <button role="menuitem" disabled={!onSortChange} className={sortRules.some((item) => item.column === columnMenu.column && item.direction === "asc" && item.nulls === "first") ? "active" : ""} onClick={(event) => sortColumn(columnMenu.column, "asc", "first", event.altKey)}><ArrowUp size={14}/>昇順（NULLを先頭）</button>
+      <button role="menuitem" disabled={!onSortChange} className={sortRules.some((item) => item.column === columnMenu.column && item.direction === "desc" && item.nulls === "first") ? "active" : ""} onClick={(event) => sortColumn(columnMenu.column, "desc", "first", event.altKey)}><ArrowDown size={14}/>降順<span>NULLは先頭</span></button>
+      <button role="menuitem" disabled={!onSortChange} className={sortRules.some((item) => item.column === columnMenu.column && item.direction === "desc" && item.nulls === "last") ? "active" : ""} onClick={(event) => sortColumn(columnMenu.column, "desc", "last", event.altKey)}><ArrowDown size={14}/>降順（NULLを末尾）</button>
+      {sortRules.some((item) => item.column === columnMenu.column) && <button role="menuitem" className="remove-sort" onClick={() => { onSortChange?.(sortRules.filter((item) => item.column !== columnMenu.column)); setColumnMenu(undefined); }}><RotateCcw size={14}/>このカラムのソートを解除</button>}
+      <div className="menu-hint">⌥を押しながら選択すると複数カラムでソート</div>
+    </div>}
   </div>;
 }
