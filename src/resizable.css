@@ -200,6 +200,12 @@ body,
   margin-right: auto;
 }
 
+.pending-changes.no-pending-changes {
+  justify-content: flex-start;
+  border-bottom-color: var(--line);
+  background: #171a20;
+}
+
 .pending-changes button {
   height: 25px;
   display: inline-flex;
@@ -217,6 +223,13 @@ body,
   border-color: #9175e8;
   background: var(--accent2);
   color: white;
+}
+
+.pending-changes button.add-row {
+  margin-right: auto;
+  border-color: #315843;
+  background: #1c3327;
+  color: #8be0b3;
 }
 
 .data-grid td.pending-cell {
@@ -239,6 +252,94 @@ body,
   color: #fff;
   padding: 4px 7px;
   font: inherit;
+}
+
+.data-grid .row-actions {
+  width: 52px;
+  min-width: 52px;
+  text-align: center;
+  cursor: default;
+}
+
+.data-grid td.row-actions {
+  padding: 2px 6px;
+}
+
+.row-actions button {
+  width: 26px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #737b88;
+  cursor: pointer;
+}
+
+.row-actions button.delete-row:hover {
+  background: #3a2025;
+  color: #ff8e96;
+}
+
+.row-actions button.undo-delete {
+  color: #e7bc6f;
+}
+
+.row-actions button:disabled {
+  opacity: .25;
+  cursor: not-allowed;
+}
+
+.data-grid tbody tr.pending-delete-row td,
+.data-grid tbody tr.pending-delete-row:hover td {
+  background: #301c20;
+  color: #a56f75;
+  text-decoration: line-through;
+}
+
+.data-grid tbody tr.pending-delete-row td.row-actions {
+  text-decoration: none;
+}
+
+.data-grid tbody tr.pending-insert-row td,
+.data-grid tbody tr.pending-insert-row:hover td {
+  background: #17291f;
+}
+
+.pending-insert-row .row-number {
+  color: #70c596;
+  font-family: Inter, sans-serif;
+  font-size: 8px;
+}
+
+.pending-insert-row td {
+  padding: 0;
+}
+
+.pending-insert-row td.row-actions {
+  padding: 2px 6px;
+}
+
+.pending-insert-row input {
+  width: 100%;
+  min-width: 120px;
+  height: 30px;
+  padding: 4px 7px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #dff6e8;
+  font: inherit;
+}
+
+.pending-insert-row input:focus {
+  box-shadow: inset 0 0 0 2px #4baf79;
+  background: #13251b;
+}
+
+.pending-insert-row input::placeholder {
+  color: #557060;
 }
 
 .query-actions {

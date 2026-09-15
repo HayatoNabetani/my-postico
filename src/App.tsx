@@ -6,7 +6,7 @@ import { emptyFilter, FilterBuilder, newCondition } from "./components/FilterBui
 import * as api from "./lib/api";
 import { exportFileName, serializeQueryPage, type ExportFormat } from "./lib/export";
 import { statementForExecution } from "./lib/sql";
-import type { ColumnInfo, ConnectionProfile, FilterGroup, ForeignKeyInfo, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableInfo, TableRowUpdate } from "./types";
+import type { ColumnInfo, ConnectionProfile, FilterGroup, ForeignKeyInfo, PendingTableRow, ProfileSecrets, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableChanges, TableInfo } from "./types";
 
 type DialogState = { open: false } | { open: true; profile?: ConnectionProfile };
 type PendingHostKey = { profile: ConnectionProfile; fingerprint: string };
@@ -21,6 +21,8 @@ interface TableTab {
   appliedFilter: FilterGroup;
   sorts: SortRule[];
   drafts: Record<string, string>;
+  inserts: PendingTableRow[];
+  deletedRows: number[];
 }
 
 const DEFAULT_CONNECTION_WIDTH = 230;
@@ -34,6 +36,10 @@ function savedSize(key: string, fallback: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function hasPendingChanges(tab: TableTab) {
+  return Object.keys(tab.drafts).length > 0 || tab.inserts.length > 0 || tab.deletedRows.length > 0;
 }
 
 export default function App() {
@@ -86,7 +92,7 @@ export default function App() {
   }
 
   function confirmDiscardTabs() {
-    return !tableTabs.some((tab) => Object.keys(tab.drafts).length > 0) || confirm("未反映のセル変更があります。破棄して続けますか？");
+    return !tableTabs.some(hasPendingChanges) || confirm("未反映の追加・編集・削除があります。破棄して続けますか？");
   }
 
   async function saveProfile(profile: ConnectionProfile, secrets: ProfileSecrets) {
@@ -149,7 +155,7 @@ export default function App() {
     const blank = emptyFilter();
     const last = savedFilters.find((item) => item.profileId === active.id && item.schema === table.schema && item.table === table.name && item.name === "__last__");
     const nextFilter = options?.filter ?? last?.root ?? blank;
-    const tab: TableTab = {id, table, columns: [], offset: 0, filter: nextFilter, appliedFilter: nextFilter, sorts: [], drafts: {}};
+    const tab: TableTab = {id, table, columns: [], offset: 0, filter: nextFilter, appliedFilter: nextFilter, sorts: [], drafts: {}, inserts: [], deletedRows: []};
     setTableTabs((current) => [...current, tab]); setActiveTableTabId(id); setSqlOpen(false); setLoading(true); setError("");
     try {
       const [nextColumns, nextPage] = await Promise.all([
@@ -180,7 +186,7 @@ export default function App() {
 
   function closeTableTab(id: string) {
     const tab = tableTabs.find((item) => item.id === id);
-    if (tab && Object.keys(tab.drafts).length > 0 && !confirm("このタブの未反映変更を破棄しますか？")) return;
+    if (tab && hasPendingChanges(tab) && !confirm("このタブの未反映の追加・編集・削除を破棄しますか？")) return;
     const index = tableTabs.findIndex((item) => item.id === id);
     const remaining = tableTabs.filter((item) => item.id !== id);
     setTableTabs(remaining);
@@ -193,9 +199,9 @@ export default function App() {
 
   async function applyFilter(nextFilter = activeTab?.filter, nextOffset = 0, nextSorts = activeTab?.sorts) {
     if (!active || !activeTab || !nextFilter || !nextSorts) return;
-    if (Object.keys(activeTab.drafts).length > 0 && !confirm("未反映のセル変更を破棄してフィルターを実行しますか？")) return;
+    if (hasPendingChanges(activeTab) && !confirm("未反映の追加・編集・削除を破棄してフィルターを実行しますか？")) return;
     const {id, table} = activeTab;
-    patchTab(id, {filter: nextFilter, appliedFilter: nextFilter, sorts: nextSorts, offset: nextOffset, drafts: {}});
+    patchTab(id, {filter: nextFilter, appliedFilter: nextFilter, sorts: nextSorts, offset: nextOffset, drafts: {}, inserts: [], deletedRows: []});
     setLoading(true); setError("");
     try {
       const nextPage = await api.queryTable(active.id, table.schema, table.name, nextFilter, nextSorts, nextOffset);
@@ -206,23 +212,24 @@ export default function App() {
     finally { setLoading(false); }
   }
 
-  async function applyTableUpdates(updates: TableRowUpdate[]) {
+  async function applyTableChanges(changes: TableChanges) {
     if (!active || !activeTab) return;
     const {id, table, appliedFilter, sorts, offset} = activeTab;
     setLoading(true); setError("");
     try {
-      const updated = await api.applyTableUpdates(active.id, table.schema, table.name, updates);
+      const result = await api.applyTableChanges(active.id, table.schema, table.name, changes);
       const nextPage = await api.queryTable(active.id, table.schema, table.name, appliedFilter, sorts, offset);
-      patchTab(id, {page: nextPage, drafts: {}}); setStatus(`${updated}行の変更を反映しました`);
+      patchTab(id, {page: nextPage, drafts: {}, inserts: [], deletedRows: []});
+      setStatus(`追加 ${result.inserted}行・更新 ${result.updated}行・削除 ${result.deleted}行を反映しました`);
     } catch (reason) { setError(String(reason)); throw reason; }
     finally { setLoading(false); }
   }
 
   async function applySort(nextSorts: SortRule[]) {
     if (!active || !activeTab) return;
-    if (Object.keys(activeTab.drafts).length > 0 && !confirm("未反映のセル変更を破棄してソートしますか？")) return;
+    if (hasPendingChanges(activeTab) && !confirm("未反映の追加・編集・削除を破棄してソートしますか？")) return;
     const {id, table, appliedFilter} = activeTab;
-    patchTab(id, {sorts: nextSorts, offset: 0, drafts: {}});
+    patchTab(id, {sorts: nextSorts, offset: 0, drafts: {}, inserts: [], deletedRows: []});
     setLoading(true); setError("");
     try {
       const nextPage = await api.queryTable(active.id, table.schema, table.name, appliedFilter, nextSorts, 0);
@@ -333,11 +340,11 @@ export default function App() {
 
     <main className="workspace">
       <header className="topbar" data-tauri-drag-region><div className="breadcrumbs" data-tauri-drag-region><Database size={14}/><span data-tauri-drag-region>{active?.name ?? "No connection"}</span>{!sqlOpen && selectedTable && <><b data-tauri-drag-region>/</b><span data-tauri-drag-region>{selectedTable.schema}</span><b data-tauri-drag-region>/</b><strong data-tauri-drag-region>{selectedTable.name}</strong></>}</div><div className="status-cluster">{active?.readOnly && <span className="readonly"><Shield size={12}/>READ ONLY</span>}<span className={connected ? "online" : "offline"}><Circle size={8} fill="currentColor"/>{status}</span>{connected && <button className="icon-button" title="切断" onClick={() => void disconnect()}><Unplug size={15}/></button>}</div></header>
-      <div className="tabbar"><div className="table-tabs">{tableTabs.map((tab) => <div className={`table-tab ${!sqlOpen && tab.id === activeTableTabId ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveTableTabId(tab.id); setSqlOpen(false); }}><Table2 size={14}/><span>{tab.table.name}</span>{Object.keys(tab.drafts).length > 0 && <i title="未反映の変更あり"/>}</button><button className="tab-close" title="タブを閉じる" onClick={() => closeTableTab(tab.id)}><X size={12}/></button></div>)}</div><button className={sqlOpen ? "active sql-tab" : "sql-tab"} onClick={() => setSqlOpen(true)}><FileCode2 size={14}/>SQL Query</button><button className="tab-more"><MoreHorizontal size={16}/></button></div>
+      <div className="tabbar"><div className="table-tabs">{tableTabs.map((tab) => <div className={`table-tab ${!sqlOpen && tab.id === activeTableTabId ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveTableTabId(tab.id); setSqlOpen(false); }}><Table2 size={14}/><span>{tab.table.name}</span>{hasPendingChanges(tab) && <i title="未反映の変更あり"/>}</button><button className="tab-close" title="タブを閉じる" onClick={() => closeTableTab(tab.id)}><X size={12}/></button></div>)}</div><button className={sqlOpen ? "active sql-tab" : "sql-tab"} onClick={() => setSqlOpen(true)}><FileCode2 size={14}/>SQL Query</button><button className="tab-more"><MoreHorizontal size={16}/></button></div>
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
       {sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || loading} onClick={() => void runSql()}><Play size={13}/>{loading ? "実行中" : "実行"}</button><div className="query-actions"><select value={selectedQueryId} onChange={(event) => { const id = event.target.value; setSelectedQueryId(id); const selected = savedQueries.find((item) => item.id === id); if (selected) setSql(selected.sql); }}><option value="">保存済みクエリー</option>{savedQueries.map((query) => <option value={query.id} key={query.id}>{query.name}</option>)}</select><button onClick={saveQuery}><Save size={13}/>{selectedQueryId ? "上書き保存" : "名前を付けて保存"}</button><button className="mini-icon danger" disabled={!selectedQueryId} title="保存済みクエリーを削除" onClick={deleteQuery}><Trash2 size={13}/></button></div></div><textarea ref={sqlEditorRef} spellCheck={false} value={sql} onChange={(event) => setSql(event.target.value)}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={loading} onQuickFilter={() => undefined} onExport={sqlPage ? (format) => exportPage(sqlPage, savedQueries.find((query) => query.id === selectedQueryId)?.name ?? "query-results", format) : undefined}/></div> : activeTab ? <>
         <FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/>
-        <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onOpenForeignTable={openForeignTable} onFollowForeignKey={followForeignKey} onExport={activeTab.page ? (format) => exportPage(activeTab.page!, `${activeTab.table.schema}.${activeTab.table.name}`, format) : undefined} onApplyChanges={active?.readOnly ? undefined : applyTableUpdates}/>
+        <DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} inserts={activeTab.inserts} onInsertsChange={(inserts) => patchTab(activeTab.id, {inserts})} deletedRows={activeTab.deletedRows} onDeletedRowsChange={(deletedRows) => patchTab(activeTab.id, {deletedRows})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onOpenForeignTable={openForeignTable} onFollowForeignKey={followForeignKey} onExport={activeTab.page ? (format) => exportPage(activeTab.page!, `${activeTab.table.schema}.${activeTab.table.name}`, format) : undefined} onApplyChanges={active?.readOnly ? undefined : applyTableChanges}/>
       </> : <div className="empty-state"><Table2 size={36}/><p>左側からテーブルを選択してください</p></div>}
     </main>
     {dialog.open && <ConnectionDialog initial={dialog.profile} onClose={() => setDialog({open: false})} onSave={saveProfile}/>} 

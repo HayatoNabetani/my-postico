@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronDown, Copy, Download, FilterX, KeyRound, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, Copy, Download, FilterX, KeyRound, Plus, RotateCcw, Trash2 } from "lucide-react";
 import type { ExportFormat } from "../lib/export";
-import type { ColumnInfo, ForeignKeyInfo, NullsOrder, QueryPage, SortDirection, SortRule, TableRowUpdate } from "../types";
+import type { ColumnInfo, ForeignKeyInfo, NullsOrder, PendingTableRow, QueryPage, SortDirection, SortRule, TableChanges } from "../types";
 
 interface Props {
   page?: QueryPage;
@@ -11,9 +11,13 @@ interface Props {
   onPrevious?: () => void;
   onNext?: () => void;
   onQuickFilter: (column: string, value: unknown) => void;
-  onApplyChanges?: (updates: TableRowUpdate[]) => Promise<void>;
+  onApplyChanges?: (changes: TableChanges) => Promise<void>;
   drafts?: Record<string, string>;
   onDraftsChange?: (drafts: Record<string, string>) => void;
+  inserts?: PendingTableRow[];
+  onInsertsChange?: (rows: PendingTableRow[]) => void;
+  deletedRows?: number[];
+  onDeletedRowsChange?: (rows: number[]) => void;
   sortRules?: SortRule[];
   onSortChange?: (sorts: SortRule[]) => void;
   onOpenForeignTable?: (foreignKey: ForeignKeyInfo) => void;
@@ -47,7 +51,7 @@ function sqlLiteral(value: unknown): string {
 
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 
-export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, sortRules = [], onSortChange, onOpenForeignTable, onFollowForeignKey, onExport }: Props) {
+export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, inserts = [], onInsertsChange, deletedRows = [], onDeletedRowsChange, sortRules = [], onSortChange, onOpenForeignTable, onFollowForeignKey, onExport }: Props) {
   const [editing, setEditing] = useState<EditingCell>();
   const [applying, setApplying] = useState(false);
   const [columnMenu, setColumnMenu] = useState<ColumnMenu>();
@@ -85,8 +89,10 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
   if (!page) return <div className="empty-state"><FilterX size={36}/><p>左側からテーブルを選択してください</p></div>;
 
   const primaryKeys = columns.filter((column) => column.primaryKey);
-  const editable = Boolean(onApplyChanges) && primaryKeys.length > 0;
-  const pendingRows = new Set(Object.keys(drafts).map((key) => Number(key.split("\u0000", 1)[0]))).size;
+  const writable = Boolean(onApplyChanges);
+  const existingRowsEditable = writable && primaryKeys.length > 0;
+  const updatedRows = new Set(Object.keys(drafts).map((key) => Number(key.split("\u0000", 1)[0]))).size;
+  const pendingCount = Object.keys(drafts).length + inserts.length + deletedRows.length;
 
   function visibleColumnValues(column: string) {
     return page!.rows.map((row, index) => {
@@ -129,16 +135,21 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     for (const [key, value] of Object.entries(drafts)) {
       const [rowText, column] = key.split("\u0000");
       const row = Number(rowText);
+      if (deletedRows.includes(row)) continue;
       grouped.set(row, {...grouped.get(row), [column]: value === "NULL" ? null : value});
     }
     const updates = [...grouped].map(([row, values]) => ({
       primaryKey: Object.fromEntries(primaryKeys.map((column) => [column.name, page!.rows[row][column.name]])),
       values,
     }));
+    const insertValues = inserts.map((row) => Object.fromEntries(Object.entries(row.values).map(([column, value]) => [column, value === "NULL" ? null : value])));
+    const deletes = deletedRows.map((row) => Object.fromEntries(primaryKeys.map((column) => [column.name, page!.rows[row][column.name]])));
     setApplying(true);
     try {
-      await onApplyChanges(updates);
+      await onApplyChanges({updates, inserts: insertValues, deletes});
       onDraftsChange?.({});
+      onInsertsChange?.([]);
+      onDeletedRowsChange?.([]);
       setEditing(undefined);
     } catch {
       // The parent displays the database error; keep drafts for correction/retry.
@@ -147,8 +158,32 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     }
   }
 
+  function discardChanges() {
+    onDraftsChange?.({});
+    onInsertsChange?.([]);
+    onDeletedRowsChange?.([]);
+    setEditing(undefined);
+  }
+
+  function addRow() {
+    onInsertsChange?.([...inserts, {id: crypto.randomUUID(), values: {}}]);
+  }
+
+  function updateInsert(id: string, column: string, value: string) {
+    onInsertsChange?.(inserts.map((row) => row.id === id ? {...row, values: {...row.values, [column]: value}} : row));
+  }
+
+  function toggleDelete(row: number) {
+    if (deletedRows.includes(row)) {
+      onDeletedRowsChange?.(deletedRows.filter((index) => index !== row));
+    } else {
+      onDeletedRowsChange?.([...deletedRows, row]);
+      setEditing(undefined);
+    }
+  }
+
   return <div className="data-view">
-    {Object.keys(drafts).length > 0 && <div className="pending-changes"><span><b>{Object.keys(drafts).length}</b>セル・<b>{pendingRows}</b>行の変更が未反映です</span><button onClick={() => { onDraftsChange?.({}); setEditing(undefined); }}><RotateCcw size={13}/>破棄</button><button className="primary" disabled={applying || loading} onClick={() => void applyChanges()}><Check size={13}/>{applying ? "反映中…" : "変更を適用"}</button></div>}
+    {writable && <div className={`pending-changes ${pendingCount === 0 ? "no-pending-changes" : ""}`}><button className="add-row" disabled={applying || loading} onClick={addRow}><Plus size={13}/>行を追加</button>{pendingCount > 0 && <><span><b>{inserts.length}</b>行追加・<b>{updatedRows}</b>行編集・<b>{deletedRows.length}</b>行削除が未反映です</span><button onClick={discardChanges}><RotateCcw size={13}/>すべて破棄</button><button className="primary" disabled={applying || loading} onClick={() => void applyChanges()}><Check size={13}/>{applying ? "反映中…" : "変更を適用"}</button></>}</div>}
     <div className="grid-wrap">
       <table className="data-grid"><thead><tr><th className="row-number">#</th>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
@@ -156,18 +191,23 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
           const sortIndex = sortRules.findIndex((item) => item.column === column);
           const sort = sortRules[sortIndex];
           return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 390))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <button className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} を新しいタブで開く`} onClick={(event) => { event.stopPropagation(); onOpenForeignTable?.(foreignKey); }}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</button>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
-        })}</tr></thead>
-        <tbody>{page.rows.map((row, index) => <tr key={index}><td className="row-number">{offset + index + 1}</td>{page.columns.map((column) => {
+        })}{writable && <th className="row-actions">操作</th>}</tr></thead>
+        <tbody>{page.rows.map((row, index) => {
+          const deleted = deletedRows.includes(index);
+          return <tr key={index} className={deleted ? "pending-delete-row" : ""}><td className="row-number">{offset + index + 1}</td>{page.columns.map((column) => {
           const meta = columns.find((item) => item.name === column);
           const foreignKey = meta?.foreignKey;
           const key = cellKey(index, column);
           const pending = key in drafts;
           const isEditing = editing?.key === key;
           const classes = [row[column] === null && !pending ? "null-cell" : "", meta?.foreignKey ? "foreign-key-cell" : "", pending ? "pending-cell" : "", isEditing ? "editing-cell" : ""].filter(Boolean).join(" ");
-          return <td key={column} className={classes} onDoubleClick={() => editable && setEditing({key, value: drafts[key] ?? display(row[column])})} onContextMenu={(event) => { event.preventDefault(); onQuickFilter(column, row[column]); }} title={editable ? "ダブルクリックで編集・右クリックで絞り込み（NULLと入力するとNULLを設定）" : primaryKeys.length === 0 && columns.length ? "主キーがないため編集できません" : "右クリックでこの値に絞り込み"}>{isEditing ? <input autoFocus value={editing?.value ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setEditing({key, value: event.target.value})} onBlur={finishEditing} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditing(undefined); }}/> : foreignKey && row[column] !== null && !pending && onFollowForeignKey ? <button className="foreign-key-link" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} の該当行を開く`} onClick={() => onFollowForeignKey(foreignKey, row[column])}>{display(row[column])}</button> : (pending ? drafts[key] : display(row[column]))}</td>;
-        })}</tr>)}</tbody>
+          return <td key={column} className={classes} onDoubleClick={() => existingRowsEditable && !deleted && setEditing({key, value: drafts[key] ?? display(row[column])})} onContextMenu={(event) => { event.preventDefault(); if (!deleted) onQuickFilter(column, row[column]); }} title={existingRowsEditable ? "ダブルクリックで編集・右クリックで絞り込み（NULLと入力するとNULLを設定）" : primaryKeys.length === 0 && columns.length ? "主キーがないため編集・削除できません" : "右クリックでこの値に絞り込み"}>{isEditing ? <input autoFocus value={editing?.value ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setEditing({key, value: event.target.value})} onBlur={finishEditing} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditing(undefined); }}/> : foreignKey && row[column] !== null && !pending && !deleted && onFollowForeignKey ? <button className="foreign-key-link" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} の該当行を開く`} onClick={() => onFollowForeignKey(foreignKey, row[column])}>{display(row[column])}</button> : (pending ? drafts[key] : display(row[column]))}</td>;
+        })}{writable && <td className="row-actions"><button disabled={!existingRowsEditable} className={deleted ? "undo-delete" : "delete-row"} title={existingRowsEditable ? deleted ? "削除を取り消す" : "この行を削除予定にする" : "主キーがないため削除できません"} onClick={() => toggleDelete(index)}>{deleted ? <RotateCcw size={13}/> : <Trash2 size={13}/>}</button></td>}</tr>;
+        })}
+        {inserts.map((row, index) => <tr key={row.id} className="pending-insert-row"><td className="row-number">新規 {index + 1}</td>{page.columns.map((column) => <td key={column} className={column in row.values ? "pending-cell" : "unset-cell"}><input aria-label={`新規行 ${index + 1} ${column}`} value={row.values[column] ?? ""} placeholder="未指定（DEFAULT）" title="未指定ならDBのDEFAULTを使用。NULLと入力するとNULLを設定" onChange={(event) => updateInsert(row.id, column, event.target.value)}/></td>)}{writable && <td className="row-actions"><button className="delete-row" title="新規行を取り消す" onClick={() => onInsertsChange?.(inserts.filter((item) => item.id !== row.id))}><Trash2 size={13}/></button></td>}</tr>)}
+        </tbody>
       </table>
-      {page.rows.length === 0 && <div className="no-rows">該当する行がありません</div>}
+      {page.rows.length === 0 && inserts.length === 0 && <div className="no-rows">該当する行がありません</div>}
       <div className="sql-preview"><span>SQL</span><code>{page.sqlPreview}</code><div className="result-actions"><button title="SQLをコピー" onClick={() => navigator.clipboard.writeText(page.sqlPreview)}><Copy size={13}/></button>{onExport && <div className="export-actions" onPointerDown={(event) => event.stopPropagation()}><button className="export-button" onClick={(event) => { if (exportMenu) { setExportMenu(undefined); return; } const rect = event.currentTarget.getBoundingClientRect(); setExportMenu({x: Math.max(8, Math.min(rect.right - 210, window.innerWidth - 218)), y: rect.bottom + 86 < window.innerHeight ? rect.bottom + 4 : rect.top - 86}); }}><Download size={13}/>エクスポート<ChevronDown size={11}/></button>{exportMenu && <div className="export-menu" role="menu" style={{left: exportMenu.x, top: exportMenu.y}}><button role="menuitem" onClick={() => { setExportMenu(undefined); void onExport("csv"); }}>CSV<span>Excel・スプレッドシート向け</span></button><button role="menuitem" onClick={() => { setExportMenu(undefined); void onExport("json"); }}>JSON<span>オブジェクト配列</span></button></div>}</div>}</div>{(onPrevious || onNext) && <div className="pager"><button disabled={loading || offset === 0} onClick={onPrevious}>前へ</button><span>{offset + 1}–{offset + page.rows.length}</span><button disabled={loading || !page.hasMore} onClick={onNext}>次へ</button></div>}</div>
     </div>
     {columnMenu && <div className="column-context-menu" role="menu" aria-label={`${columnMenu.column} カラムの操作`} style={{left: columnMenu.x, top: columnMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
