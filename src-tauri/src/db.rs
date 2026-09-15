@@ -27,6 +27,14 @@ fn error_message(error: &(dyn Error + 'static)) -> String {
     messages.join(": ")
 }
 
+fn postgres_error(context: &str, error: &postgres::Error) -> String {
+    let Some(database_error) = error.as_db_error() else { return format!("{context}: {}", error_message(error)); };
+    let mut lines = vec![format!("{context}: {}", database_error.message()), format!("SQLSTATE: {}", database_error.code().code())];
+    if let Some(detail) = database_error.detail() { lines.push(format!("詳細: {detail}")); }
+    if let Some(hint) = database_error.hint() { lines.push(format!("ヒント: {hint}")); }
+    lines.join("\n")
+}
+
 pub fn connect(profile: &ConnectionProfile) -> Result<ConnectedDb, String> {
     let tunnel = if profile.ssh.enabled { Some(SshTunnel::start(profile)?) } else { None };
     let mut config = Config::new();
@@ -137,7 +145,7 @@ pub fn query_table(client: &mut Client, schema: &str, table: &str, filter: &Filt
     // an expensive COUNT(*) while keeping the visible page capped at 100 rows.
     let sql = format!("SELECT to_jsonb(__mp_row) FROM (SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {} OFFSET {offset}) __mp_row", compiled.sql, TABLE_PAGE_SIZE + 1);
     let refs: Vec<&(dyn ToSql + Sync)> = compiled.params.iter().map(|value| value as &(dyn ToSql + Sync)).collect();
-    let mut rows = client.query(&sql, &refs).map_err(|e| format!("フィルター実行エラー: {e}"))?.into_iter().map(|row| row.get::<_, Value>(0).as_object().cloned().unwrap_or_default()).collect::<Vec<_>>();
+    let mut rows = client.query(&sql, &refs).map_err(|e| postgres_error("フィルター実行エラー", &e))?.into_iter().map(|row| row.get::<_, Value>(0).as_object().cloned().unwrap_or_default()).collect::<Vec<_>>();
     let has_more = rows.len() > TABLE_PAGE_SIZE as usize;
     if has_more { rows.pop(); }
     Ok(QueryPage { columns: columns.into_iter().map(|c| c.name).collect(), rows, has_more, sql_preview: format!("SELECT * FROM {qualified} WHERE {} ORDER BY {order_sql} LIMIT {TABLE_PAGE_SIZE} OFFSET {offset}", compiled.sql) })
@@ -151,6 +159,33 @@ fn editable_value(value: &Value) -> Result<String, String> {
         Value::Null => Err("NULL".into()),
         _ => serde_json::to_string(value).map_err(|e| e.to_string()),
     }
+}
+
+fn leading_sql_keyword(sql: &str) -> &str {
+    let bytes = sql.as_bytes();
+    let mut index = 0;
+    loop {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
+        if index + 1 < bytes.len() && bytes[index] == b'-' && bytes[index + 1] == b'-' {
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' { index += 1; }
+            continue;
+        }
+        if index + 1 < bytes.len() && bytes[index] == b'/' && bytes[index + 1] == b'*' {
+            index += 2;
+            let mut depth = 1;
+            while index + 1 < bytes.len() && depth > 0 {
+                if bytes[index] == b'/' && bytes[index + 1] == b'*' { depth += 1; index += 2; }
+                else if bytes[index] == b'*' && bytes[index + 1] == b'/' { depth -= 1; index += 2; }
+                else { index += 1; }
+            }
+            continue;
+        }
+        break;
+    }
+    let start = index;
+    while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_') { index += 1; }
+    &sql[start..index]
 }
 
 pub fn apply_table_updates(client: &mut Client, schema: &str, table: &str, updates: Vec<TableRowUpdate>, read_only: bool) -> Result<u64, String> {
@@ -198,12 +233,12 @@ pub fn apply_table_updates(client: &mut Client, schema: &str, table: &str, updat
 pub fn execute_sql(client: &mut Client, sql: &str, read_only: bool) -> Result<QueryPage, String> {
     let trimmed = sql.trim().trim_end_matches(';').trim();
     if trimmed.is_empty() { return Err("SQLを入力してください".into()); }
-    let first = trimmed.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    let first = leading_sql_keyword(trimmed).to_ascii_lowercase();
     if !matches!(first.as_str(), "select" | "with" | "values") {
         return Err(if read_only { "読み取り専用接続では書き込みSQLを実行できません".into() } else { "現在のMVPではSQLエディタからの書き込みを無効化しています".into() });
     }
     let wrapped = format!("SELECT to_jsonb(__mp_sql) FROM ({trimmed}) __mp_sql LIMIT 501");
-    let mut objects = client.query(&wrapped, &[]).map_err(|e| format!("SQL実行エラー: {e}"))?.into_iter().map(|row| row.get::<_, Value>(0).as_object().cloned().unwrap_or_default()).collect::<Vec<_>>();
+    let mut objects = client.query(&wrapped, &[]).map_err(|e| postgres_error("SQL実行エラー", &e))?.into_iter().map(|row| row.get::<_, Value>(0).as_object().cloned().unwrap_or_default()).collect::<Vec<_>>();
     let has_more = objects.len() > 500; if has_more { objects.pop(); }
     let column_names = objects.first().map(|item| item.keys().cloned().collect()).unwrap_or_default();
     Ok(QueryPage { columns: column_names, rows: objects, has_more, sql_preview: trimmed.into() })
@@ -239,5 +274,11 @@ mod tests {
             SortRule { column: "id".into(), direction: "desc".into(), nulls: "first".into() },
         ];
         assert!(compile_order(&test_columns(), &sorts).is_err());
+    }
+
+    #[test]
+    fn finds_keyword_after_sql_comments() {
+        assert_eq!(leading_sql_keyword("-- selected query\n SELECT 1"), "SELECT");
+        assert_eq!(leading_sql_keyword("/* outer /* nested */ comment */\nwith value as (select 1) select * from value"), "with");
     }
 }
