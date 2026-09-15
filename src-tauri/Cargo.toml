@@ -27,6 +27,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
+tauri-plugin-dialog = "2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -37,6 +37,8 @@ export const queryTable = (profileId: string, schema: string, table: string, fil
 export const applyTableUpdates = (profileId: string, schema: string, table: string, updates: TableRowUpdate[]) =>
   invoke<number>("apply_table_updates", { profileId, schema, table, updates });
 export const executeSql = (profileId: string, sql: string) => invoke<QueryPage>("execute_sql", { profileId, sql });
+export const exportResults = (fileName: string, format: "csv" | "json", contents: string) =>
+  invoke<string | null>("export_results", { fileName, format, contents });
 
 export function loadSavedFilters(): SavedFilter[] {
   return JSON.parse(localStorage.getItem("my-postico-filters") ?? "[]");

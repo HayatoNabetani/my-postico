@@ -7,6 +7,7 @@ mod store;
 use db::ConnectedDb;
 use models::{ColumnInfo, ConnectionProfile, FilterNode, ProfileSecrets, QueryPage, SchemaInfo, SortRule, TableInfo, TableRowUpdate};
 use std::{collections::HashMap, sync::Mutex};
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(Default)]
 struct AppState {
@@ -82,11 +83,25 @@ fn execute_sql(state: tauri::State<AppState>, profile_id: String, sql: String) -
     with_connection(&state, &profile_id, |db| db::execute_sql(&mut db.client, &sql, db.read_only))
 }
 
+#[tauri::command]
+async fn export_results(app: tauri::AppHandle, file_name: String, format: String, contents: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+        let extension = match format.as_str() { "csv" => "csv", "json" => "json", _ => return Err("未対応のエクスポート形式です".into()) };
+        let safe_name = std::path::Path::new(&file_name).file_name().and_then(|name| name.to_str()).ok_or("保存ファイル名が不正です")?;
+        let Some(file_path) = app.dialog().file().set_title("結果をエクスポート").set_file_name(safe_name).add_filter(extension.to_uppercase(), &[extension]).blocking_save_file() else { return Ok(None); };
+        let path = file_path.into_path().map_err(|error| format!("保存先を取得できません: {error}"))?;
+        let output = if format == "csv" { format!("\u{feff}{contents}") } else { contents };
+        std::fs::write(&path, output).map_err(|error| format!("エクスポートに失敗しました: {error}"))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }).await.map_err(|error| format!("保存処理に失敗しました: {error}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![list_profiles, save_profile, delete_profile, test_connection, connect_profile, disconnect_profile, list_schemas, list_tables, get_columns, query_table, apply_table_updates, execute_sql])
+        .invoke_handler(tauri::generate_handler![list_profiles, save_profile, delete_profile, test_connection, connect_profile, disconnect_profile, list_schemas, list_tables, get_columns, query_table, apply_table_updates, execute_sql, export_results])
         .run(tauri::generate_context!())
         .expect("failed to run My Postico");
 }
