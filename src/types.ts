@@ -31,7 +31,8 @@ export interface ProfileSecrets {
 }
 
 export interface SchemaInfo { name: string }
-export interface TableInfo { schema: string; name: string; kind: "table" | "view" }
+export interface TableInfo { schema: string; name: string; kind: "table" | "view" | "materialized_view" }
+export interface FunctionInfo { schema: string; name: string; arguments: string; returnType: string; kind: "function" | "procedure" }
 
 export interface ForeignKeyInfo {
   schema: string;
@@ -120,7 +121,15 @@ export interface SavedFilter {
 
 export interface SavedQuery {
   id: string;
+  profileId: string;
+  folderId?: string;
   name: string;
   sql: string;
   updatedAt: string;
+}
+
+export interface QueryFolder {
+  id: string;
+  profileId: string;
+  name: string;
 }

@@ -6,6 +6,35 @@ pub struct CompiledFilter {
     pub params: Vec<String>,
 }
 
+fn sql_string_literal(value: &str) -> String {
+    format!("E'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
+}
+
+pub(crate) fn inline_parameters(sql: &str, params: &[String]) -> String {
+    let bytes = sql.as_bytes();
+    let mut output = String::with_capacity(sql.len() + params.iter().map(String::len).sum::<usize>());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'$' {
+            let mut end = index + 1;
+            while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
+            if end > index + 1 {
+                if let Ok(parameter_index) = sql[index + 1..end].parse::<usize>() {
+                    if let Some(value) = parameter_index.checked_sub(1).and_then(|position| params.get(position)) {
+                        output.push_str(&sql_string_literal(value));
+                        index = end;
+                        continue;
+                    }
+                }
+            }
+        }
+        let character = sql[index..].chars().next().expect("valid UTF-8 boundary");
+        output.push(character);
+        index += character.len_utf8();
+    }
+    output
+}
+
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
@@ -121,5 +150,12 @@ mod tests {
         let result = compile(&filter, &columns).unwrap();
         assert_eq!(result.sql, "\"age\" >= ($1::text)::integer");
         assert_eq!(result.params, ["18"]);
+    }
+
+    #[test]
+    fn creates_executable_preview_without_changing_parameter_contents() {
+        let sql = "name = $1::text AND note = $2::text";
+        let params = vec!["O'Reilly\\docs $2".into(), "日本語".into()];
+        assert_eq!(inline_parameters(sql, &params), "name = E'O''Reilly\\\\docs $2'::text AND note = E'日本語'::text");
     }
 }

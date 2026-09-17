@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronDown, Copy, Download, FilterX, KeyRound, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ClipboardCopy, Copy, Download, FilterX, KeyRound, Plus, RotateCcw, Trash2 } from "lucide-react";
 import type { ExportFormat } from "../lib/export";
 import type { ColumnInfo, ForeignKeyInfo, NullsOrder, PendingTableRow, QueryPage, SortDirection, SortRule, TableChanges } from "../types";
 
@@ -27,8 +27,6 @@ interface Props {
 
 interface EditingCell { key: string; value: string }
 interface ColumnMenu { column: string; x: number; y: number }
-interface ExportMenu { x: number; y: number }
-
 function display(value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "object") return JSON.stringify(value);
@@ -50,12 +48,31 @@ function sqlLiteral(value: unknown): string {
 }
 
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
+const MAX_SPREADSHEET_COPY_CELLS = 20_000;
+const MAX_SPREADSHEET_COPY_CHARACTERS = 5_000_000;
+
+function spreadsheetCopyBlocked(page: QueryPage): boolean {
+  if ((page.rows.length + 1) * page.columns.length > MAX_SPREADSHEET_COPY_CELLS) return true;
+  let size = page.columns.reduce((total, column) => total + column.length + 1, 0);
+  for (const row of page.rows) {
+    for (const column of page.columns) {
+      const value = row[column];
+      if (typeof value === "string") size += value.length;
+      else if (value !== null && value !== undefined && typeof value === "object") {
+        try { size += JSON.stringify(value).length; } catch { return true; }
+      } else size += 16;
+      if (size > MAX_SPREADSHEET_COPY_CHARACTERS) return true;
+    }
+  }
+  return false;
+}
 
 export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, onNext, onQuickFilter, onApplyChanges, drafts = {}, onDraftsChange, inserts = [], onInsertsChange, deletedRows = [], onDeletedRowsChange, sortRules = [], onSortChange, onOpenForeignTable, onFollowForeignKey, onExport }: Props) {
   const [editing, setEditing] = useState<EditingCell>();
   const [applying, setApplying] = useState(false);
   const [columnMenu, setColumnMenu] = useState<ColumnMenu>();
-  const [exportMenu, setExportMenu] = useState<ExportMenu>();
+  const [exporting, setExporting] = useState<ExportFormat>();
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
 
   useEffect(() => {
     if (!columnMenu) return;
@@ -73,18 +90,6 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     };
   }, [columnMenu]);
 
-  useEffect(() => {
-    if (!exportMenu) return;
-    const close = () => setExportMenu(undefined);
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [exportMenu]);
-
   if (loading && !page) return <div className="empty-state"><div className="spinner"/><p>データを取得しています</p></div>;
   if (!page) return <div className="empty-state"><FilterX size={36}/><p>左側からテーブルを選択してください</p></div>;
 
@@ -93,6 +98,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
   const existingRowsEditable = writable && primaryKeys.length > 0;
   const updatedRows = new Set(Object.keys(drafts).map((key) => Number(key.split("\u0000", 1)[0]))).size;
   const pendingCount = Object.keys(drafts).length + inserts.length + deletedRows.length;
+  const resultCopyBlocked = spreadsheetCopyBlocked(page);
 
   function visibleColumnValues(column: string) {
     return page!.rows.map((row, index) => {
@@ -182,6 +188,27 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     }
   }
 
+  async function exportAs(format: ExportFormat) {
+    if (!onExport || exporting) return;
+    setExporting(format);
+    try { await onExport(format); }
+    finally { setExporting(undefined); }
+  }
+
+  async function copyResultsForSpreadsheet() {
+    if (resultCopyBlocked || copyStatus === "copying") return;
+    setCopyStatus("copying");
+    const header = page!.columns.map(spreadsheetCell).join("\t");
+    const rows = page!.rows.map((row) => page!.columns.map((column) => spreadsheetCell(row[column])).join("\t"));
+    try {
+      await navigator.clipboard.writeText([header, ...rows].join("\n"));
+      setCopyStatus("copied");
+      window.setTimeout(() => setCopyStatus("idle"), 1600);
+    } catch {
+      setCopyStatus("error");
+    }
+  }
+
   return <div className="data-view">
     {writable && <div className={`pending-changes ${pendingCount === 0 ? "no-pending-changes" : ""}`}><button className="add-row" disabled={applying || loading} onClick={addRow}><Plus size={13}/>行を追加</button>{pendingCount > 0 && <><span><b>{inserts.length}</b>行追加・<b>{updatedRows}</b>行編集・<b>{deletedRows.length}</b>行削除が未反映です</span><button onClick={discardChanges}><RotateCcw size={13}/>すべて破棄</button><button className="primary" disabled={applying || loading} onClick={() => void applyChanges()}><Check size={13}/>{applying ? "反映中…" : "変更を適用"}</button></>}</div>}
     <div className="grid-wrap">
@@ -208,7 +235,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
         </tbody>
       </table>
       {page.rows.length === 0 && inserts.length === 0 && <div className="no-rows">該当する行がありません</div>}
-      <div className="sql-preview"><span>SQL</span><code>{page.sqlPreview}</code><div className="result-actions"><button title="SQLをコピー" onClick={() => navigator.clipboard.writeText(page.sqlPreview)}><Copy size={13}/></button>{onExport && <div className="export-actions" onPointerDown={(event) => event.stopPropagation()}><button className="export-button" onClick={(event) => { if (exportMenu) { setExportMenu(undefined); return; } const rect = event.currentTarget.getBoundingClientRect(); setExportMenu({x: Math.max(8, Math.min(rect.right - 210, window.innerWidth - 218)), y: rect.bottom + 86 < window.innerHeight ? rect.bottom + 4 : rect.top - 86}); }}><Download size={13}/>エクスポート<ChevronDown size={11}/></button>{exportMenu && <div className="export-menu" role="menu" style={{left: exportMenu.x, top: exportMenu.y}}><button role="menuitem" onClick={() => { setExportMenu(undefined); void onExport("csv"); }}>CSV<span>Excel・スプレッドシート向け</span></button><button role="menuitem" onClick={() => { setExportMenu(undefined); void onExport("json"); }}>JSON<span>オブジェクト配列</span></button></div>}</div>}</div>{(onPrevious || onNext) && <div className="pager"><button disabled={loading || offset === 0} onClick={onPrevious}>前へ</button><span>{offset + 1}–{offset + page.rows.length}</span><button disabled={loading || !page.hasMore} onClick={onNext}>次へ</button></div>}</div>
+      <div className="sql-preview"><span>SQL</span><code>{page.sqlPreview}</code><div className="result-actions"><button title="SQLをコピー" onClick={() => navigator.clipboard.writeText(page.sqlPreview)}><Copy size={13}/></button><button className="spreadsheet-copy-button" disabled={resultCopyBlocked || copyStatus === "copying"} title={resultCopyBlocked ? "結果が大きすぎます（上限: 20,000セル・概算5MB）" : "ヘッダー付きでコピーしてスプレッドシートへ貼り付け"} onClick={() => void copyResultsForSpreadsheet()}><ClipboardCopy size={13}/>{copyStatus === "copying" ? "コピー中…" : copyStatus === "copied" ? "コピー済み" : copyStatus === "error" ? "コピー失敗" : "表をコピー"}</button>{onExport && <div className="export-actions"><button className="export-button" disabled={Boolean(exporting)} onClick={() => void exportAs("csv")}><Download size={13}/>{exporting === "csv" ? "保存中…" : "CSV"}</button><button className="export-button" disabled={Boolean(exporting)} onClick={() => void exportAs("json")}><Download size={13}/>{exporting === "json" ? "保存中…" : "JSON"}</button></div>}</div>{(onPrevious || onNext) && <div className="pager"><button disabled={loading || offset === 0} onClick={onPrevious}>前へ</button><span>{offset + 1}–{offset + page.rows.length}</span><button disabled={loading || !page.hasMore} onClick={onNext}>次へ</button></div>}</div>
     </div>
     {columnMenu && <div className="column-context-menu" role="menu" aria-label={`${columnMenu.column} カラムの操作`} style={{left: columnMenu.x, top: columnMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(columnMenu.column); setColumnMenu(undefined); }}><Copy size={14}/>カラム名をコピー</button>

@@ -58,6 +58,7 @@ impl SshTunnel {
             _ => return Err("未対応のSSH認証方式です".into()),
         }
         if !session.authenticated() { return Err("SSH認証に失敗しました".into()); }
+        session.set_keepalive(true, 30);
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("ローカル転送ポートを確保できません: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
