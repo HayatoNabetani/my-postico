@@ -650,6 +650,23 @@ body,
   scrollbar-gutter: stable;
 }
 
+.data-grid tbody tr:not(.virtual-spacer) {
+  height: 31px;
+}
+
+.data-grid tbody .virtual-spacer,
+.data-grid tbody .virtual-spacer:hover {
+  height: auto;
+  background: transparent;
+}
+
+.data-grid tbody .virtual-spacer td,
+.data-grid tbody .virtual-spacer:hover td {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .data-view {
   flex: 1;
   min-width: 0;

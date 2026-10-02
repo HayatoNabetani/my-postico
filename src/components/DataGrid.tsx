@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Check, ClipboardCopy, Copy, Download, FilterX, KeyRound, Plus, RotateCcw, Trash2 } from "lucide-react";
 import type { ExportFormat } from "../lib/export";
 import type { ColumnInfo, ForeignKeyInfo, NullsOrder, PendingTableRow, QueryPage, SortDirection, SortRule, TableChanges } from "../types";
@@ -50,6 +50,9 @@ function sqlLiteral(value: unknown): string {
 const cellKey = (row: number, column: string) => `${row}\u0000${column}`;
 const MAX_SPREADSHEET_COPY_CELLS = 20_000;
 const MAX_SPREADSHEET_COPY_CHARACTERS = 5_000_000;
+const GRID_ROW_HEIGHT = 31;
+const GRID_OVERSCAN_ROWS = 12;
+const GRID_VIRTUALIZE_AFTER = 150;
 
 function spreadsheetCopyBlocked(page: QueryPage): boolean {
   if ((page.rows.length + 1) * page.columns.length > MAX_SPREADSHEET_COPY_CELLS) return true;
@@ -73,6 +76,17 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
   const [columnMenu, setColumnMenu] = useState<ColumnMenu>();
   const [exporting, setExporting] = useState<ExportFormat>();
   const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const gridRef = useRef<HTMLDivElement>(null);
+  const scrollFrameRef = useRef<number | undefined>(undefined);
+  const [viewport, setViewport] = useState({scrollTop: 0, height: 600});
+  const columnMeta = useMemo(() => new Map(columns.map((column) => [column.name, column])), [columns]);
+  const primaryKeys = useMemo(() => columns.filter((column) => column.primaryKey), [columns]);
+  const resultCopyBlocked = useMemo(() => page ? spreadsheetCopyBlocked(page) : false, [page]);
+  const rowCount = page?.rows.length ?? 0;
+  const shouldVirtualize = rowCount > GRID_VIRTUALIZE_AFTER;
+  const firstVisibleRow = shouldVirtualize ? Math.max(0, Math.floor(viewport.scrollTop / GRID_ROW_HEIGHT) - GRID_OVERSCAN_ROWS) : 0;
+  const lastVisibleRow = shouldVirtualize ? Math.min(rowCount, firstVisibleRow + Math.ceil(viewport.height / GRID_ROW_HEIGHT) + GRID_OVERSCAN_ROWS * 2) : rowCount;
+  const visibleRows = useMemo(() => page?.rows.slice(firstVisibleRow, lastVisibleRow) ?? [], [page, firstVisibleRow, lastVisibleRow]);
 
   useEffect(() => {
     if (!columnMenu) return;
@@ -90,15 +104,34 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     };
   }, [columnMenu]);
 
+  useEffect(() => {
+    const element = gridRef.current;
+    if (!element) return;
+    const measure = () => setViewport((current) => ({scrollTop: element.scrollTop, height: element.clientHeight || current.height}));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const element = gridRef.current;
+    if (!element) return;
+    element.scrollTop = 0;
+    setViewport((current) => current.scrollTop === 0 ? current : {...current, scrollTop: 0});
+  }, [page]);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== undefined) cancelAnimationFrame(scrollFrameRef.current);
+  }, []);
+
   if (loading && !page) return <div className="empty-state"><div className="spinner"/><p>データを取得しています</p></div>;
   if (!page) return <div className="empty-state"><FilterX size={36}/><p>左側からテーブルを選択してください</p></div>;
 
-  const primaryKeys = columns.filter((column) => column.primaryKey);
   const writable = Boolean(onApplyChanges);
   const existingRowsEditable = writable && primaryKeys.length > 0;
   const updatedRows = new Set(Object.keys(drafts).map((key) => Number(key.split("\u0000", 1)[0]))).size;
   const pendingCount = Object.keys(drafts).length + inserts.length + deletedRows.length;
-  const resultCopyBlocked = spreadsheetCopyBlocked(page);
 
   function visibleColumnValues(column: string) {
     return page!.rows.map((row, index) => {
@@ -209,20 +242,31 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     }
   }
 
+  function handleGridScroll(event: React.UIEvent<HTMLDivElement>) {
+    const scrollTop = event.currentTarget.scrollTop;
+    if (scrollTop === viewport.scrollTop) return;
+    if (scrollFrameRef.current !== undefined) cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      setViewport((current) => current.scrollTop === scrollTop ? current : {...current, scrollTop});
+      scrollFrameRef.current = undefined;
+    });
+  }
+
   return <div className="data-view">
     {writable && <div className={`pending-changes ${pendingCount === 0 ? "no-pending-changes" : ""}`}><button className="add-row" disabled={applying || loading} onClick={addRow}><Plus size={13}/>行を追加</button>{pendingCount > 0 && <><span><b>{inserts.length}</b>行追加・<b>{updatedRows}</b>行編集・<b>{deletedRows.length}</b>行削除が未反映です</span><button onClick={discardChanges}><RotateCcw size={13}/>すべて破棄</button><button className="primary" disabled={applying || loading} onClick={() => void applyChanges()}><Check size={13}/>{applying ? "反映中…" : "変更を適用"}</button></>}</div>}
-    <div className="grid-wrap">
+    <div className="grid-wrap" ref={gridRef} onScroll={handleGridScroll}>
       <table className="data-grid"><thead><tr><th className="row-number">#</th>{page.columns.map((column) => {
-          const meta = columns.find((item) => item.name === column);
+          const meta = columnMeta.get(column);
           const foreignKey = meta?.foreignKey;
           const sortIndex = sortRules.findIndex((item) => item.column === column);
           const sort = sortRules[sortIndex];
           return <th key={column} className={[foreignKey ? "foreign-key-column" : "", sort ? "sorted-column" : ""].filter(Boolean).join(" ")} onContextMenu={(event) => { event.preventDefault(); setColumnMenu({column, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 250)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 390))}); }} title="右クリックでカラム操作"><div className="column-heading"><span>{column}</span><span className="column-badges">{meta?.primaryKey && <b className="key-badge primary-key">PK</b>}{foreignKey && <button className="key-badge foreign-key" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} を新しいタブで開く`} onClick={(event) => { event.stopPropagation(); onOpenForeignTable?.(foreignKey); }}><KeyRound size={9}/>FK → {foreignKey.table}.{foreignKey.column}</button>}{sort && <b className="sort-badge" title={`${sortIndex + 1}番目: ${sort.direction === "asc" ? "昇順" : "降順"}・NULL ${sort.nulls === "first" ? "先頭" : "末尾"}`}>{sort.direction === "asc" ? <ArrowUp size={10}/> : <ArrowDown size={10}/>} {sortIndex + 1}</b>}</span></div><small>{meta?.dataType}</small></th>;
         })}{writable && <th className="row-actions">操作</th>}</tr></thead>
-        <tbody>{page.rows.map((row, index) => {
+        <tbody>{firstVisibleRow > 0 && <tr className="virtual-spacer" aria-hidden="true"><td colSpan={page.columns.length + 1 + (writable ? 1 : 0)} style={{height: firstVisibleRow * GRID_ROW_HEIGHT}}/></tr>}{visibleRows.map((row, visibleIndex) => {
+          const index = firstVisibleRow + visibleIndex;
           const deleted = deletedRows.includes(index);
           return <tr key={index} className={deleted ? "pending-delete-row" : ""}><td className="row-number">{offset + index + 1}</td>{page.columns.map((column) => {
-          const meta = columns.find((item) => item.name === column);
+          const meta = columnMeta.get(column);
           const foreignKey = meta?.foreignKey;
           const key = cellKey(index, column);
           const pending = key in drafts;
@@ -230,7 +274,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
           const classes = [row[column] === null && !pending ? "null-cell" : "", meta?.foreignKey ? "foreign-key-cell" : "", pending ? "pending-cell" : "", isEditing ? "editing-cell" : ""].filter(Boolean).join(" ");
           return <td key={column} className={classes} onDoubleClick={() => existingRowsEditable && !deleted && setEditing({key, value: drafts[key] ?? display(row[column])})} onContextMenu={(event) => { event.preventDefault(); if (!deleted) onQuickFilter(column, row[column]); }} title={existingRowsEditable ? "ダブルクリックで編集・右クリックで絞り込み（NULLと入力するとNULLを設定）" : primaryKeys.length === 0 && columns.length ? "主キーがないため編集・削除できません" : "右クリックでこの値に絞り込み"}>{isEditing ? <input autoFocus value={editing?.value ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setEditing({key, value: event.target.value})} onBlur={finishEditing} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditing(undefined); }}/> : foreignKey && row[column] !== null && !pending && !deleted && onFollowForeignKey ? <button className="foreign-key-link" title={`${foreignKey.schema}.${foreignKey.table}.${foreignKey.column} の該当行を開く`} onClick={() => onFollowForeignKey(foreignKey, row[column])}>{display(row[column])}</button> : (pending ? drafts[key] : display(row[column]))}</td>;
         })}{writable && <td className="row-actions"><button disabled={!existingRowsEditable} className={deleted ? "undo-delete" : "delete-row"} title={existingRowsEditable ? deleted ? "削除を取り消す" : "この行を削除予定にする" : "主キーがないため削除できません"} onClick={() => toggleDelete(index)}>{deleted ? <RotateCcw size={13}/> : <Trash2 size={13}/>}</button></td>}</tr>;
-        })}
+        })}{lastVisibleRow < page.rows.length && <tr className="virtual-spacer" aria-hidden="true"><td colSpan={page.columns.length + 1 + (writable ? 1 : 0)} style={{height: (page.rows.length - lastVisibleRow) * GRID_ROW_HEIGHT}}/></tr>}
         {inserts.map((row, index) => <tr key={row.id} className="pending-insert-row"><td className="row-number">新規 {index + 1}</td>{page.columns.map((column) => <td key={column} className={column in row.values ? "pending-cell" : "unset-cell"}><input aria-label={`新規行 ${index + 1} ${column}`} value={row.values[column] ?? ""} placeholder="未指定（DEFAULT）" title="未指定ならDBのDEFAULTを使用。NULLと入力するとNULLを設定" onChange={(event) => updateInsert(row.id, column, event.target.value)}/></td>)}{writable && <td className="row-actions"><button className="delete-row" title="新規行を取り消す" onClick={() => onInsertsChange?.(inserts.filter((item) => item.id !== row.id))}><Trash2 size={13}/></button></td>}</tr>)}
         </tbody>
       </table>
