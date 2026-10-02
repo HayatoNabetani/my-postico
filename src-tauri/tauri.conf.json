@@ -22,7 +22,10 @@
       "titleBarStyle": "Overlay",
       "hiddenTitle": true
     }],
-    "security": { "csp": null }
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    }
   },
   "bundle": {
     "active": true,
