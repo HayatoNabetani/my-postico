@@ -112,7 +112,7 @@ export function DataGrid({ page, columns = [], loading, offset = 0, onPrevious, 
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [Boolean(page)]);
 
   useEffect(() => {
     const element = gridRef.current;

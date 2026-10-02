@@ -10,6 +10,7 @@ use std::{
 
 const SERVICE: &str = "dev.mypostico.desktop";
 static SECRET_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 fn secret_cache() -> &'static Mutex<HashMap<String, String>> {
     SECRET_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -35,6 +36,7 @@ pub fn find_profile(id: &str) -> Result<ConnectionProfile, String> {
 }
 
 pub fn save_profile(profile: ConnectionProfile, secrets: ProfileSecrets) -> Result<(), String> {
+    let _guard = PROFILE_WRITE_LOCK.lock().map_err(|_| "接続設定をロックできません")?;
     let mut profiles = list_profiles()?;
     profiles.retain(|item| item.id != profile.id);
     profiles.push(profile.clone());
@@ -51,9 +53,13 @@ pub fn save_profile(profile: ConnectionProfile, secrets: ProfileSecrets) -> Resu
 }
 
 pub fn delete_profile(id: &str) -> Result<(), String> {
+    let _guard = PROFILE_WRITE_LOCK.lock().map_err(|_| "接続設定をロックできません")?;
     let mut profiles = list_profiles()?;
     profiles.retain(|item| item.id != id);
-    fs::write(config_path()?, serde_json::to_string_pretty(&profiles).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let path = config_path()?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_string_pretty(&profiles).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    fs::rename(temporary, path).map_err(|e| e.to_string())?;
     for kind in ["db-password", "ssh-password", "key-passphrase"] {
         let key = secret_key(id, kind);
         if let Ok(mut cache) = secret_cache().lock() { cache.remove(&key); }
