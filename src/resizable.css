@@ -445,6 +445,21 @@ body,
   white-space: nowrap;
 }
 
+.schema-tree .object-load-more {
+  margin: 3px 6px 7px;
+  width: calc(100% - 12px);
+  border: 1px dashed #3b4050;
+  background: #181b22;
+  color: #9a8bc3;
+  justify-content: center;
+}
+
+.schema-tree .object-load-more:hover {
+  border-color: #6f57ad;
+  background: #242033;
+  color: #d6c7fc;
+}
+
 .browser-pane-heading {
   flex: none;
   height: 31px;

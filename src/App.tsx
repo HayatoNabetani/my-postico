@@ -69,6 +69,9 @@ const DEFAULT_OBJECT_WIDTH = 230;
 const DEFAULT_SQL_EDITOR_HEIGHT = 180;
 const DEFAULT_QUERY_PANE_HEIGHT = 260;
 const DEFAULT_SQL = "select now() as server_time;";
+const FUNCTION_RENDER_BATCH = 120;
+const SQL_KEYWORDS = ["SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "INNER JOIN", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT INTO", "UPDATE", "DELETE FROM", "WITH", "AS", "AND", "OR", "NOT", "NULL", "IS NULL", "IN", "BETWEEN", "DISTINCT", "UNION ALL", "CASE", "WHEN", "THEN", "ELSE", "END"];
+const SQL_BUILTIN_FUNCTIONS = ["COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "NOW", "DATE_TRUNC", "EXTRACT", "STRING_AGG", "ARRAY_AGG", "JSONB_BUILD_OBJECT"];
 
 function newSqlTab(index: number): SqlTab {
   return {id: crypto.randomUUID(), title: index === 1 ? "SQL Query" : `SQL Query ${index}`, sql: index === 1 ? DEFAULT_SQL : "", savedQueryId: "", folderId: ""};
@@ -148,6 +151,7 @@ export default function App() {
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [csvImportTable, setCsvImportTable] = useState<TableInfo>();
   const [objectSearch, setObjectSearch] = useState("");
+  const [functionRenderLimits, setFunctionRenderLimits] = useState<Record<string, number>>({});
   const [querySearch, setQuerySearch] = useState("");
   const objectSearchRef = useRef<HTMLInputElement>(null);
   const [filterFocusRequest, setFilterFocusRequest] = useState(0);
@@ -173,6 +177,15 @@ export default function App() {
   const normalizedQuerySearch = querySearch.trim().toLocaleLowerCase();
   const visibleUnfiledQueries = useMemo(() => unfiledQueries.filter((query) => !normalizedQuerySearch || query.name.toLocaleLowerCase().includes(normalizedQuerySearch)), [unfiledQueries, normalizedQuerySearch]);
   const openConnectionProfiles = useMemo(() => openConnectionIds.map((id) => profiles.find((profile) => profile.id === id)).filter((profile): profile is ConnectionProfile => Boolean(profile)), [openConnectionIds, profiles]);
+  const sqlCatalogCompletions = useMemo(() => {
+    const options: SqlCompletionItem[] = [];
+    for (const schema of schemas) options.push({label: schema.name, type: "class", detail: "スキーマ", boost: 20});
+    for (const [schema, schemaTables] of Object.entries(tables)) for (const table of schemaTables) options.push({label: table.name, type: "class", detail: `${schema} · ${table.kind === "view" ? "ビュー" : "テーブル"}`, boost: 50});
+    for (const [schema, schemaFunctions] of Object.entries(functions)) for (const item of schemaFunctions) options.push({label: item.name, type: "function", detail: `${schema} · ${item.arguments || "引数なし"}`, apply: `${item.name}()`, boost: 45});
+    for (const keyword of SQL_KEYWORDS) options.push({label: keyword, type: "keyword"});
+    for (const fn of SQL_BUILTIN_FUNCTIONS) options.push({label: fn, type: "function", apply: `${fn}()`});
+    return options;
+  }, [schemas, tables, functions]);
 
   useEffect(() => { api.listProfiles().then(setProfiles).catch((reason) => setError(String(reason))); }, []);
   useEffect(() => { localStorage.setItem("my-postico:connection-width", String(connectionWidth)); }, [connectionWidth]);
@@ -182,6 +195,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem("my-postico:connection-sidebar-collapsed", String(connectionSidebarCollapsed)); }, [connectionSidebarCollapsed]);
   useEffect(() => { localStorage.setItem("my-postico:object-sidebar-collapsed", String(objectSidebarCollapsed)); }, [objectSidebarCollapsed]);
   useEffect(() => { sqlColumnCache.current = {}; }, [active?.id]);
+  useEffect(() => { setFunctionRenderLimits({}); }, [active?.id]);
   useEffect(() => { setSqlSelection(undefined); }, [activeSqlTab?.id]);
   useEffect(() => {
     if (!runningSqlTab) return;
@@ -747,11 +761,7 @@ export default function App() {
       options.push({label: column.name, type: "property", detail: `${reference.alias ? `${reference.alias} → ` : ""}${reference.schema}.${reference.table}`, boost: 100});
     }
     if (qualifier) return options;
-    for (const schema of schemas) options.push({label: schema.name, type: "class", detail: "スキーマ", boost: 20});
-    for (const [schema, schemaTables] of Object.entries(tables)) for (const table of schemaTables) options.push({label: table.name, type: "class", detail: `${schema} · ${table.kind === "view" ? "ビュー" : "テーブル"}`, boost: 50});
-    for (const [schema, schemaFunctions] of Object.entries(functions)) for (const item of schemaFunctions) options.push({label: item.name, type: "function", detail: `${schema} · ${item.arguments || "引数なし"}`, apply: `${item.name}()`, boost: 45});
-    for (const keyword of ["SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "INNER JOIN", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT INTO", "UPDATE", "DELETE FROM", "WITH", "AS", "AND", "OR", "NOT", "NULL", "IS NULL", "IN", "BETWEEN", "DISTINCT", "UNION ALL", "CASE", "WHEN", "THEN", "ELSE", "END"]) options.push({label: keyword, type: "keyword"});
-    for (const fn of ["COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "NOW", "DATE_TRUNC", "EXTRACT", "STRING_AGG", "ARRAY_AGG", "JSONB_BUILD_OBJECT"]) options.push({label: fn, type: "function", apply: `${fn}()`});
+    options.push(...sqlCatalogCompletions);
     return options;
   }
 
@@ -915,10 +925,12 @@ export default function App() {
           const matchesSchema = schema.name.toLocaleLowerCase().includes(query);
           const schemaTables = (tables[schema.name] ?? []).filter((table) => !query || matchesSchema || table.name.toLocaleLowerCase().includes(query));
           const schemaFunctions = (functions[schema.name] ?? []).filter((item) => !query || matchesSchema || item.name.toLocaleLowerCase().includes(query) || item.arguments.toLocaleLowerCase().includes(query));
+          const functionLimit = functionRenderLimits[schema.name] ?? FUNCTION_RENDER_BATCH;
+          const renderedFunctions = schemaFunctions.slice(0, functionLimit);
           const visibleItems = objectBrowserMode === "tables" ? schemaTables : schemaFunctions;
           if (query && !matchesSchema && visibleItems.length === 0) return null;
           const collapsed = collapsedSchemas[schema.name] && !query;
-          return <div key={schema.name} onContextMenu={(event) => openTableContextMenu(event, undefined, schema.name)}><button className="schema-name" aria-expanded={!collapsed} onClick={() => setCollapsedSchemas((current) => ({...current, [schema.name]: !current[schema.name]}))}><ChevronRight className={`disclosure ${collapsed ? "" : "expanded"}`} size={12}/><Folder size={13}/>{schema.name}</button>{!collapsed && objectBrowserMode === "tables" && schemaTables.map((table) => <button key={`${schema.name}.${table.name}`} className={!sqlOpen && selectedTable?.schema === schema.name && selectedTable.name === table.name ? "selected" : ""} onClick={() => void openTable(table)} onContextMenu={(event) => openTableContextMenu(event, table)}><Table2 size={14}/><span className="object-name">{table.name}</span><small>{table.kind === "view" ? "V" : table.kind === "materialized_view" ? "MV" : ""}</small></button>)}{!collapsed && objectBrowserMode === "functions" && schemaFunctions.map((item) => <button key={`${item.schema}.${item.name}(${item.arguments})`} onClick={() => void openFunctionDefinition(item)}><span className="function-symbol">ƒ</span><span className="object-name">{item.name}({item.arguments})</span><small>{item.kind === "procedure" ? "P" : item.returnType}</small></button>)}</div>;
+          return <div key={schema.name} onContextMenu={(event) => openTableContextMenu(event, undefined, schema.name)}><button className="schema-name" aria-expanded={!collapsed} onClick={() => setCollapsedSchemas((current) => ({...current, [schema.name]: !current[schema.name]}))}><ChevronRight className={`disclosure ${collapsed ? "" : "expanded"}`} size={12}/><Folder size={13}/>{schema.name}</button>{!collapsed && objectBrowserMode === "tables" && schemaTables.map((table) => <button key={`${schema.name}.${table.name}`} className={!sqlOpen && selectedTable?.schema === schema.name && selectedTable.name === table.name ? "selected" : ""} onClick={() => void openTable(table)} onContextMenu={(event) => openTableContextMenu(event, table)}><Table2 size={14}/><span className="object-name">{table.name}</span><small>{table.kind === "view" ? "V" : table.kind === "materialized_view" ? "MV" : ""}</small></button>)}{!collapsed && objectBrowserMode === "functions" && renderedFunctions.map((item) => <button key={`${item.schema}.${item.name}(${item.arguments})`} onClick={() => void openFunctionDefinition(item)}><span className="function-symbol">ƒ</span><span className="object-name">{item.name}({item.arguments})</span><small>{item.kind === "procedure" ? "P" : item.returnType}</small></button>)}{!collapsed && objectBrowserMode === "functions" && renderedFunctions.length < schemaFunctions.length && <button className="object-load-more" onClick={(event) => { event.stopPropagation(); setFunctionRenderLimits((current) => ({...current, [schema.name]: functionLimit + FUNCTION_RENDER_BATCH})); }}><Plus size={12}/><span>さらに表示</span><small>残り {schemaFunctions.length - renderedFunctions.length}</small></button>}</div>;
         })}</div>}
       </section>
       </>}
