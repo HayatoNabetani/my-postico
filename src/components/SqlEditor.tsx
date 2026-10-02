@@ -21,11 +21,21 @@ export interface SqlEditorHandle {
   selection: () => {from: number; to: number};
 }
 
+export interface SqlSelection {
+  from: number;
+  to: number;
+  fromLine: number;
+  fromColumn: number;
+  toLine: number;
+  toColumn: number;
+}
+
 interface Props {
   value: string;
   onChange: (value: string) => void;
   onRun: (from: number, to: number) => void;
   getCompletions: (text: string, position: number) => Promise<SqlCompletionItem[]>;
+  onSelectionChange?: (selection?: SqlSelection) => void;
 }
 
 const sqlHighlight = HighlightStyle.define([
@@ -39,16 +49,18 @@ const sqlHighlight = HighlightStyle.define([
   {tag: [tags.operator, tags.punctuation], color: "#9ba3af"},
 ]);
 
-export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({value, onChange, onRun, getCompletions}, forwardedRef) {
+export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({value, onChange, onRun, getCompletions, onSelectionChange}, forwardedRef) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const onRunRef = useRef(onRun);
   const completionRef = useRef(getCompletions);
+  const selectionChangeRef = useRef(onSelectionChange);
   onChangeRef.current = onChange;
   onRunRef.current = onRun;
   completionRef.current = getCompletions;
+  selectionChangeRef.current = onSelectionChange;
 
   useImperativeHandle(forwardedRef, () => ({
     focus: () => viewRef.current?.focus(),
@@ -76,7 +88,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({
           basicSetup,
           sql({dialect: PostgreSQL}),
           syntaxHighlighting(sqlHighlight),
-          EditorView.theme({}, {dark: true}),
+          EditorView.theme({
+            "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {backgroundColor: "#7657bd99 !important"},
+            ".cm-content ::selection": {backgroundColor: "#7657bd99 !important"},
+          }, {dark: true}),
           autocompletion({override: [completeSql], activateOnTyping: true}),
           Prec.high(keymap.of([
             {key: "Tab", run: acceptCompletion},
@@ -96,10 +111,27 @@ export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({
           }),
           EditorView.contentAttributes.of({"aria-label": "SQLエディタ", spellcheck: "false", autocapitalize: "none", autocorrect: "off"}),
           EditorView.updateListener.of((update) => {
-            if (!update.docChanged) return;
-            const next = update.state.doc.toString();
-            valueRef.current = next;
-            onChangeRef.current(next);
+            if (update.docChanged) {
+              const next = update.state.doc.toString();
+              valueRef.current = next;
+              onChangeRef.current(next);
+            }
+            if (update.selectionSet || update.docChanged) {
+              const selection = update.state.selection.main;
+              if (selection.empty) selectionChangeRef.current?.(undefined);
+              else {
+                const from = update.state.doc.lineAt(selection.from);
+                const to = update.state.doc.lineAt(selection.to);
+                selectionChangeRef.current?.({
+                  from: selection.from,
+                  to: selection.to,
+                  fromLine: from.number,
+                  fromColumn: selection.from - from.from + 1,
+                  toLine: to.number,
+                  toColumn: selection.to - to.from + 1,
+                });
+              }
+            }
           }),
         ],
       }),

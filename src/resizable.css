@@ -990,8 +990,23 @@ body,
 }
 
 .sql-editor .cm-selectionBackground,
-.sql-editor .cm-focused .cm-selectionBackground {
-  background: #59448b88 !important;
+.sql-editor .cm-focused .cm-selectionBackground,
+.sql-editor .cm-selectionLayer .cm-selectionBackground {
+  background: #7657bd99 !important;
+}
+
+.sql-editor .cm-content ::selection {
+  background: #7657bd99 !important;
+}
+
+.sql-selection-status {
+  padding: 3px 7px;
+  border: 1px solid #5c478a;
+  border-radius: 5px;
+  background: #2d2441;
+  color: #d7c8ff;
+  font: 9px/1.2 "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
 }
 
 .sql-editor .tok-keyword,
