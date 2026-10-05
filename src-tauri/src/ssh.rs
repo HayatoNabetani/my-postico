@@ -59,6 +59,7 @@ impl SshTunnel {
         }
         if !session.authenticated() { return Err("SSH認証に失敗しました".into()); }
         session.set_keepalive(true, 30);
+        session.set_blocking(false);
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("ローカル転送ポートを確保できません: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -68,18 +69,38 @@ impl SshTunnel {
         let destination_host = profile.host.clone();
         let destination_port = profile.port;
         let worker = thread::Builder::new().name(format!("ssh-tunnel-{}", profile.id)).spawn(move || {
+            let mut channels: Vec<JoinHandle<()>> = Vec::new();
             while !worker_stop.load(Ordering::Relaxed) {
+                let mut index = 0;
+                while index < channels.len() {
+                    if channels[index].is_finished() { let _ = channels.swap_remove(index).join(); }
+                    else { index += 1; }
+                }
                 match listener.accept() {
                     Ok((local, _)) => {
-                        session.set_blocking(true);
-                        let channel = session.channel_direct_tcpip(&destination_host, destination_port, None);
-                        session.set_blocking(false);
-                        if let Ok(channel) = channel { pump(local, channel, &worker_stop); }
+                        // CancelRequest uses a second TCP connection while the query is running.
+                        // Keep accepting connections instead of waiting for the first pump to end.
+                        let deadline = std::time::Instant::now() + Duration::from_secs(12);
+                        while !worker_stop.load(Ordering::Relaxed) {
+                            match session.channel_direct_tcpip(&destination_host, destination_port, None) {
+                                Ok(channel) => {
+                                    let stop = Arc::clone(&worker_stop);
+                                    if let Ok(handle) = thread::Builder::new().name("ssh-forward".into()).spawn(move || pump(local, channel, &stop)) {
+                                        channels.push(handle);
+                                    }
+                                    break;
+                                }
+                                Err(error) if error.code() == ssh2::ErrorCode::Session(-37) && std::time::Instant::now() < deadline => thread::sleep(Duration::from_millis(2)),
+                                Err(_) => break,
+                            }
+                        }
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
                     Err(_) => break,
                 }
             }
+            worker_stop.store(true, Ordering::Relaxed);
+            for channel in channels { let _ = channel.join(); }
             let _ = session.disconnect(None, "My Postico tunnel closed", None);
         }).map_err(|e| e.to_string())?;
         Ok(Self { port, stop, worker: Some(worker) })
@@ -108,13 +129,14 @@ fn pump(mut local: TcpStream, mut channel: ssh2::Channel, stop: &AtomicBool) {
     let mut to_ssh = Vec::<u8>::new();
     let mut to_local = Vec::<u8>::new();
     let mut local_eof = false;
+    let mut eof_sent = false;
     loop {
         if stop.load(Ordering::Relaxed) { break; }
         let mut progressed = false;
         if to_ssh.is_empty() && !local_eof {
             let mut buffer = [0_u8; 32 * 1024];
             match local.read(&mut buffer) {
-                Ok(0) => { local_eof = true; let _ = channel.send_eof(); }
+                Ok(0) => { local_eof = true; }
                 Ok(size) => { to_ssh.extend_from_slice(&buffer[..size]); progressed = true; }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {}
                 Err(_) => break,
@@ -124,6 +146,13 @@ fn pump(mut local: TcpStream, mut channel: ssh2::Channel, stop: &AtomicBool) {
             match channel.write(&to_ssh) {
                 Ok(size) => { to_ssh.drain(..size); progressed = true; }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+                Err(_) => break,
+            }
+        }
+        if local_eof && !eof_sent && to_ssh.is_empty() {
+            match channel.send_eof() {
+                Ok(()) => { eof_sent = true; progressed = true; }
+                Err(error) if error.code() == ssh2::ErrorCode::Session(-37) => {}
                 Err(_) => break,
             }
         }
@@ -143,7 +172,7 @@ fn pump(mut local: TcpStream, mut channel: ssh2::Channel, stop: &AtomicBool) {
                 Err(_) => break,
             }
         }
-        if local_eof && channel.eof() && to_ssh.is_empty() && to_local.is_empty() { break; }
+        if channel.eof() && to_ssh.is_empty() && to_local.is_empty() { break; }
         if !progressed { thread::sleep(Duration::from_millis(2)); }
     }
     let _ = channel.close();
