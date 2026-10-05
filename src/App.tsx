@@ -64,18 +64,12 @@ interface ConnectionWorkspace {
   objectBrowserMode: ObjectBrowserMode;
 }
 
-const DEFAULT_CONNECTION_WIDTH = 230;
 const DEFAULT_OBJECT_WIDTH = 230;
 const DEFAULT_SQL_EDITOR_HEIGHT = 180;
 const DEFAULT_QUERY_PANE_HEIGHT = 260;
-const DEFAULT_SQL = "select now() as server_time;";
 const FUNCTION_RENDER_BATCH = 120;
 const SQL_KEYWORDS = ["SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "INNER JOIN", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT INTO", "UPDATE", "DELETE FROM", "WITH", "AS", "AND", "OR", "NOT", "NULL", "IS NULL", "IN", "BETWEEN", "DISTINCT", "UNION ALL", "CASE", "WHEN", "THEN", "ELSE", "END"];
 const SQL_BUILTIN_FUNCTIONS = ["COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "NOW", "DATE_TRUNC", "EXTRACT", "STRING_AGG", "ARRAY_AGG", "JSONB_BUILD_OBJECT"];
-
-function newSqlTab(index: number): SqlTab {
-  return {id: crypto.randomUUID(), title: index === 1 ? "SQL Query" : `SQL Query ${index}`, sql: index === 1 ? DEFAULT_SQL : "", savedQueryId: "", folderId: ""};
-}
 
 function savedSize(key: string, fallback: number) {
   const value = Number(localStorage.getItem(key));
@@ -124,7 +118,7 @@ export default function App() {
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(api.loadSavedFilters());
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(api.loadSavedQueries());
   const [queryFolders, setQueryFolders] = useState<QueryFolder[]>(api.loadQueryFolders());
-  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>(() => [newSqlTab(1)]);
+  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([]);
   const [activeSqlTabId, setActiveSqlTabId] = useState(() => "");
   const [queryContextMenu, setQueryContextMenu] = useState<QueryContextMenu>();
   const [tableContextMenu, setTableContextMenu] = useState<TableContextMenu>();
@@ -155,11 +149,9 @@ export default function App() {
   const [querySearch, setQuerySearch] = useState("");
   const objectSearchRef = useRef<HTMLInputElement>(null);
   const [filterFocusRequest, setFilterFocusRequest] = useState(0);
-  const [connectionWidth, setConnectionWidth] = useState(() => savedSize("my-postico:connection-width", DEFAULT_CONNECTION_WIDTH));
   const [objectWidth, setObjectWidth] = useState(() => savedSize("my-postico:object-width", DEFAULT_OBJECT_WIDTH));
   const [sqlEditorHeight, setSqlEditorHeight] = useState(() => savedSize("my-postico:sql-editor-height", DEFAULT_SQL_EDITOR_HEIGHT));
   const [queryPaneHeight, setQueryPaneHeight] = useState(() => savedSize("my-postico:query-pane-height", DEFAULT_QUERY_PANE_HEIGHT));
-  const [connectionSidebarCollapsed, setConnectionSidebarCollapsed] = useState(() => localStorage.getItem("my-postico:connection-sidebar-collapsed") === "true");
   const [objectSidebarCollapsed, setObjectSidebarCollapsed] = useState(() => localStorage.getItem("my-postico:object-sidebar-collapsed") === "true");
 
   const activeTab = tableTabs.find((tab) => tab.id === activeTableTabId);
@@ -188,11 +180,9 @@ export default function App() {
   }, [schemas, tables, functions]);
 
   useEffect(() => { api.listProfiles().then(setProfiles).catch((reason) => setError(String(reason))); }, []);
-  useEffect(() => { localStorage.setItem("my-postico:connection-width", String(connectionWidth)); }, [connectionWidth]);
   useEffect(() => { localStorage.setItem("my-postico:object-width", String(objectWidth)); }, [objectWidth]);
   useEffect(() => { localStorage.setItem("my-postico:sql-editor-height", String(sqlEditorHeight)); }, [sqlEditorHeight]);
   useEffect(() => { localStorage.setItem("my-postico:query-pane-height", String(queryPaneHeight)); }, [queryPaneHeight]);
-  useEffect(() => { localStorage.setItem("my-postico:connection-sidebar-collapsed", String(connectionSidebarCollapsed)); }, [connectionSidebarCollapsed]);
   useEffect(() => { localStorage.setItem("my-postico:object-sidebar-collapsed", String(objectSidebarCollapsed)); }, [objectSidebarCollapsed]);
   useEffect(() => { sqlColumnCache.current = {}; }, [active?.id]);
   useEffect(() => { setFunctionRenderLimits({}); }, [active?.id]);
@@ -203,6 +193,15 @@ export default function App() {
     const timer = window.setInterval(() => setExecutionClock(Date.now()), 100);
     return () => window.clearInterval(timer);
   }, [runningSqlTab?.id]);
+  useEffect(() => {
+    if (!runningSqlTab?.cancelRequested) return;
+    const tabId = runningSqlTab.id;
+    const timer = window.setTimeout(() => {
+      patchSqlTab(tabId, {cancelRequested: false});
+      setStatus("SQLの停止をまだ確認できません。キャンセルを再試行できます。");
+    }, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [runningSqlTab?.id, runningSqlTab?.cancelRequested]);
   useEffect(() => {
     if (!activeSqlTabId && sqlTabs[0]) setActiveSqlTabId(sqlTabs[0].id);
   }, [activeSqlTabId, sqlTabs]);
@@ -236,13 +235,11 @@ export default function App() {
     const toggleSidebars = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "b" || event.isComposing) return;
       event.preventDefault();
-      const shouldOpen = connectionSidebarCollapsed && objectSidebarCollapsed;
-      setConnectionSidebarCollapsed(!shouldOpen);
-      setObjectSidebarCollapsed(!shouldOpen);
+      setObjectSidebarCollapsed((collapsed) => !collapsed);
     };
     window.addEventListener("keydown", toggleSidebars);
     return () => window.removeEventListener("keydown", toggleSidebars);
-  }, [connectionSidebarCollapsed, objectSidebarCollapsed]);
+  }, []);
   useEffect(() => {
     const connectionShortcuts = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.isComposing) return;
@@ -290,8 +287,7 @@ export default function App() {
   }
 
   function freshWorkspace(): ConnectionWorkspace {
-    const firstSqlTab = newSqlTab(1);
-    return {schemas: [], tables: {}, functions: {}, tableTabs: [], activeTableTabId: undefined, sqlTabs: [firstSqlTab], activeSqlTabId: firstSqlTab.id, sqlOpen: true, objectSearch: "", querySearch: "", collapsedQueryFolders: {}, collapsedSchemas: {}, objectBrowserMode: "tables"};
+    return {schemas: [], tables: {}, functions: {}, tableTabs: [], activeTableTabId: undefined, sqlTabs: [], activeSqlTabId: "", sqlOpen: false, objectSearch: "", querySearch: "", collapsedQueryFolders: {}, collapsedSchemas: {}, objectBrowserMode: "tables"};
   }
 
   function restoreWorkspace(workspace: ConnectionWorkspace) {
@@ -417,7 +413,7 @@ export default function App() {
       if (action === "drop") {
         const remaining = tableTabs.filter((tab) => tab.table.schema !== table.schema || tab.table.name !== table.name);
         setTableTabs(remaining);
-        if (activeTab?.table.schema === table.schema && activeTab.table.name === table.name) { setActiveTableTabId(remaining[0]?.id); if (remaining.length === 0) setSqlOpen(true); }
+        if (activeTab?.table.schema === table.schema && activeTab.table.name === table.name) { setActiveTableTabId(remaining[0]?.id); if (remaining.length === 0) setSqlOpen(sqlTabs.length > 0); }
       }
       await refreshObjectCatalog(); setStatus(`${label}しました`);
     } catch (reason) { setError(String(reason)); }
@@ -469,7 +465,7 @@ export default function App() {
     const index = sqlTabs.findIndex((tab) => tab.id === id);
     const remaining = sqlTabs.filter((tab) => tab.id !== id);
     if (remaining.length === 0) {
-      const replacement = newSqlTab(1); setSqlTabs([replacement]); setActiveSqlTabId(replacement.id); return;
+      setSqlTabs([]); setActiveSqlTabId(""); setSqlOpen(false); return;
     }
     setSqlTabs(remaining);
     if (activeSqlTab?.id === id) setActiveSqlTabId(remaining[Math.min(index, remaining.length - 1)].id);
@@ -623,7 +619,7 @@ export default function App() {
     if (activeTableTabId === id) {
       const next = remaining[Math.min(index, remaining.length - 1)];
       setActiveTableTabId(next?.id);
-      if (!next) setSqlOpen(true);
+      if (!next) setSqlOpen(sqlTabs.length > 0);
     }
   }
 
@@ -706,7 +702,7 @@ export default function App() {
       if (/^\s*(create|alter|drop|truncate|refresh)\b/i.test(statement)) await refreshObjectCatalog();
       setStatus(`SQLを実行しました（${formatDuration(Date.now() - startedAt)}）`);
     } catch (reason) {
-      if (cancelledSqlTabs.current.has(tabId)) setStatus(`SQLをキャンセルしました（${formatDuration(Date.now() - startedAt)}）`);
+      if (cancelledSqlTabs.current.has(tabId) && String(reason).includes("57014")) setStatus(`SQLをキャンセルしました（${formatDuration(Date.now() - startedAt)}）`);
       else { setError(String(reason)); setStatus("SQL実行に失敗しました"); }
     } finally {
       const duration = Date.now() - startedAt;
@@ -794,8 +790,7 @@ export default function App() {
   function removeQueryTabs(queryIds: Set<string>) {
     const remaining = sqlTabs.filter((tab) => !queryIds.has(tab.savedQueryId));
     if (remaining.length === 0) {
-      const replacement = newSqlTab(1);
-      setSqlTabs([replacement]); setActiveSqlTabId(replacement.id);
+      setSqlTabs([]); setActiveSqlTabId(""); setSqlOpen(false);
     } else {
       setSqlTabs(remaining);
       if (activeSqlTab && queryIds.has(activeSqlTab.savedQueryId)) setActiveSqlTabId(remaining[0].id);
@@ -881,27 +876,13 @@ export default function App() {
 
   const showConnectionHome = !connected || connectionHomeActive;
   const shellStyle = {
-    "--connection-width": connectionSidebarCollapsed ? "38px" : `${connectionWidth}px`,
-    "--connection-resizer-width": connectionSidebarCollapsed ? "0px" : "5px",
     "--object-width": showConnectionHome ? "0px" : objectSidebarCollapsed ? "38px" : `${objectWidth}px`,
     "--object-resizer-width": showConnectionHome || objectSidebarCollapsed ? "0px" : "5px",
   } as CSSProperties;
   const sqlStyle = {"--sql-editor-height": `${sqlEditorHeight}px`} as CSSProperties;
   const objectSidebarStyle = {"--query-pane-height": `${queryPaneHeight}px`} as CSSProperties;
 
-  return <div className={`app-shell ${connectionSidebarCollapsed ? "connection-sidebar-is-collapsed" : ""}`} style={shellStyle}>
-    <aside className={`connection-sidebar ${connectionSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      {connectionSidebarCollapsed ? <button className="sidebar-expand" title="Connectionsを開く（⌘Bですべて切替）" aria-label="Connectionsを開く" onClick={() => setConnectionSidebarCollapsed(false)}><PanelLeftOpen size={16}/></button> : <>
-      <div className="sidebar-heading connection-sidebar-heading" data-tauri-drag-region><span data-tauri-drag-region>CONNECTIONS</span><div><button title="Connectionsを折りたたむ（⌘Bですべて切替）" aria-label="Connectionsを折りたたむ" onClick={() => setConnectionSidebarCollapsed(true)}><PanelLeftClose size={15}/></button><button title="接続を追加（⌘P）" aria-label="接続を追加" onClick={() => { setConnectionPickerOpen(true); setConnectionHomeActive(true); setNewConnectionFocusRequest((current) => current + 1); }}><Plus size={16}/></button></div></div>
-      <div className="connection-list">{profiles.map((profile, index) => <div className={`connection-card ${active?.id === profile.id ? "active" : ""}`} key={profile.id}>
-        <button className="connection-main" title={index < 9 ? `接続（⌘${index + 1}）` : undefined} onClick={() => void connect(profile)}><span className={`environment-dot ${profile.environment.toLowerCase()}`}/><span><strong>{profile.name}</strong><small>{profile.username}@{profile.host}</small></span>{index < 9 && <kbd className="connection-shortcut">⌘{index + 1}</kbd>}</button>
-        <div className="connection-actions"><button title="編集" onClick={() => setDialog({open: true, profile})}><Pencil size={13}/></button><button title="削除" onClick={() => void removeProfile(profile)}><Trash2 size={13}/></button></div>
-      </div>)}</div>
-      </>}
-    </aside>
-
-    <div className={`resize-handle column-resize-handle ${connectionSidebarCollapsed ? "collapsed-resizer" : ""}`} role="separator" aria-label="接続サイドバーの幅を変更" aria-orientation="vertical" tabIndex={connectionSidebarCollapsed ? -1 : 0} onPointerDown={(event) => beginHorizontalResize(event, connectionWidth, setConnectionWidth, 160, 420)} onKeyDown={(event) => resizeWithKeyboard(event, connectionWidth, setConnectionWidth, 160, 420)} onDoubleClick={() => setConnectionWidth(DEFAULT_CONNECTION_WIDTH)}/>
-
+  return <div className="app-shell connections-in-home" style={shellStyle}>
     <aside className={`object-sidebar ${objectSidebarCollapsed ? "sidebar-collapsed" : ""}`} style={objectSidebarStyle}>
       {objectSidebarCollapsed ? <button className="sidebar-expand" title="Queries / Tablesを開く（⌘Bですべて切替）" aria-label="Queries / Tablesを開く" onClick={() => setObjectSidebarCollapsed(false)}><PanelLeftOpen size={16}/></button> : <>
       <header data-tauri-drag-region><div data-tauri-drag-region><Server size={16}/><strong data-tauri-drag-region>{active?.database ?? "Database"}</strong></div><div className="sidebar-header-actions"><button title="Queries / Tablesを折りたたむ（⌘Bですべて切替）" aria-label="Queries / Tablesを折りたたむ" onClick={() => setObjectSidebarCollapsed(true)}><PanelLeftClose size={15}/></button><button title="再読み込み" aria-label="再読み込み" disabled={!connected} onClick={() => active && void connect(active, {force: true})}><RefreshCw size={14}/></button></div></header>
@@ -943,7 +924,10 @@ export default function App() {
       {(openConnectionProfiles.length > 0 || connectionPickerOpen || !connected) && <div className="connection-tabbar"><div className="connection-tabs">{openConnectionProfiles.map((profile) => <div className={`connection-workspace-tab ${!connectionHomeActive && active?.id === profile.id ? "active" : ""}`} key={profile.id}><button className="connection-tab-select" disabled={loading || Boolean(runningSqlTab)} onClick={() => void connect(profile)}><span className={`environment-dot ${profile.environment.toLowerCase()}`}/><Database size={14}/><span>{profile.name}</span></button><button className="connection-tab-close" disabled={loading || Boolean(runningSqlTab)} title={`${profile.name} を閉じる`} onClick={() => void closeConnectionTab(profile.id)}><X size={12}/></button></div>)}{(connectionPickerOpen || !connected) && <div className={`connection-workspace-tab new-connection-tab ${connectionHomeActive || !connected ? "active" : ""}`}><button className="connection-tab-select" onClick={() => { rememberActiveWorkspace(); setConnectionPickerOpen(true); setConnectionHomeActive(true); }}><Plus size={14}/><span>新しい接続</span></button>{openConnectionProfiles.length > 0 && <button className="connection-tab-close" title="新しい接続を閉じる" onClick={() => { setConnectionPickerOpen(false); setConnectionHomeActive(false); }}><X size={12}/></button>}</div>}</div><button className="connection-tab-add" title="新しい接続（⌘T）" onClick={() => { rememberActiveWorkspace(); setConnectionPickerOpen(true); setConnectionHomeActive(true); setNewConnectionFocusRequest((current) => current + 1); }}><Plus size={15}/></button></div>}
       {connected && !connectionHomeActive && <div className="tabbar"><div className="table-tabs">{tableTabs.map((tab) => <div className={`table-tab ${!sqlOpen && tab.id === activeTableTabId ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveTableTabId(tab.id); setSqlOpen(false); }}><Table2 size={14}/><span>{tab.table.name}</span>{hasPendingChanges(tab) && <i title="未反映の変更あり"/>}</button><button className="tab-close" title="タブを閉じる" onClick={() => closeTableTab(tab.id)}><X size={12}/></button></div>)}{sqlTabs.map((tab) => <div className={`table-tab sql-file-tab ${sqlOpen && tab.id === activeSqlTab?.id ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveSqlTabId(tab.id); setSqlOpen(true); }}><FileCode2 size={14}/><span>{tab.title}</span>{tab.running && <LoaderCircle className="tab-running-spinner" size={11}/>}</button><button className="tab-close" disabled={tab.running} title={tab.running ? "実行中は閉じられません" : "SQLタブを閉じる"} onClick={() => closeSqlTab(tab.id)}><X size={12}/></button></div>)}</div></div>}
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
-      {showConnectionHome ? <section className="connection-welcome"><div className="connection-welcome-card"><header className="connection-welcome-header"><div className="connection-welcome-icon"><Database size={25}/></div><div><h1>データベースに接続</h1><p>左のConnectionsから接続先を選ぶか、新しい接続を作成してください。</p></div></header><div className="connection-start-grid"><ConnectionDialog embedded focusRequest={newConnectionFocusRequest} onClose={() => undefined} onSave={saveProfile}/></div></div></section> : sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || Boolean(runningSqlTab)} title="実行（⌘↵）" onClick={() => void runSql()}><Play size={13}/>実行<kbd>⌘↵</kbd></button>{runningSqlTab && <><span className="sql-running-status"><LoaderCircle size={13}/><strong>{runningSqlTab.title}</strong> を実行中 · {formatDuration(executionClock - (runningSqlTab.executionStartedAt ?? executionClock))}</span><button className="sql-cancel-button" disabled={runningSqlTab.cancelRequested} onClick={() => void cancelRunningSql()}><Square size={11}/>{runningSqlTab.cancelRequested ? "キャンセル中…" : "キャンセル"}</button></>}{!runningSqlTab && activeSqlTab?.executionDurationMs !== undefined && <span className="sql-duration"><Clock3 size={12}/>実行時間 {formatDuration(activeSqlTab.executionDurationMs)}</span>}{sqlSelection && <span className="sql-selection-status">選択 {sqlSelection.fromLine}:{sqlSelection.fromColumn}–{sqlSelection.toLine}:{sqlSelection.toColumn} · {sqlSelection.to - sqlSelection.from}文字</span>}<span className="sql-editor-hint">コメント切替 <kbd>⌘/</kbd> · 候補 <kbd>⌃Space</kbd></span></div><SqlEditor ref={sqlEditorRef} value={sql} onChange={setSql} onRun={(from, to) => { if (!runningSqlTab) void runSql(from, to); }} getCompletions={getSqlCompletions} onSelectionChange={setSqlSelection}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={Boolean(activeSqlTab?.running)} onQuickFilter={() => undefined} onExport={sqlPage ? (format) => exportPage(sqlPage, connectionQueries.find((query) => query.id === selectedQueryId)?.name ?? activeSqlTab?.title ?? "query-results", format) : undefined}/></div> : activeTab ? <div className="table-workspace">
+      {showConnectionHome ? <section className="connection-welcome"><div className="connection-welcome-card"><section className="saved-connections-home"><h2>保存済みの接続</h2>      <div className="connection-list">{profiles.map((profile, index) => <div className={`connection-card ${active?.id === profile.id ? "active" : ""}`} key={profile.id}>
+        <button className="connection-main" title={index < 9 ? `接続（⌘${index + 1}）` : undefined} onClick={() => void connect(profile)}><span className={`environment-dot ${profile.environment.toLowerCase()}`}/><span><strong>{profile.name}</strong><small>{profile.username}@{profile.host}</small></span>{index < 9 && <kbd className="connection-shortcut">⌘{index + 1}</kbd>}</button>
+        <div className="connection-actions"><button title="編集" onClick={() => setDialog({open: true, profile})}><Pencil size={13}/></button><button title="削除" onClick={() => void removeProfile(profile)}><Trash2 size={13}/></button></div>
+      </div>)}</div>{profiles.length === 0 && <p>保存済みの接続はありません。</p>}</section><header className="connection-welcome-header"><div className="connection-welcome-icon"><Database size={25}/></div><div><h1>データベースに接続</h1><p>上の一覧から接続先を選ぶか、新しい接続を作成してください。</p></div></header><div className="connection-start-grid"><ConnectionDialog embedded focusRequest={newConnectionFocusRequest} onClose={() => undefined} onSave={saveProfile}/></div></div></section> : sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || Boolean(runningSqlTab)} title="実行（⌘↵）" onClick={() => void runSql()}><Play size={13}/>実行<kbd>⌘↵</kbd></button>{runningSqlTab && <><span className="sql-running-status"><LoaderCircle size={13}/><strong>{runningSqlTab.title}</strong> を実行中 · {formatDuration(executionClock - (runningSqlTab.executionStartedAt ?? executionClock))}</span><button className="sql-cancel-button" disabled={runningSqlTab.cancelRequested} onClick={() => void cancelRunningSql()}><Square size={11}/>{runningSqlTab.cancelRequested ? "キャンセル中…" : "キャンセル"}</button></>}{!runningSqlTab && activeSqlTab?.executionDurationMs !== undefined && <span className="sql-duration"><Clock3 size={12}/>実行時間 {formatDuration(activeSqlTab.executionDurationMs)}</span>}{sqlSelection && <span className="sql-selection-status">選択 {sqlSelection.fromLine}:{sqlSelection.fromColumn}–{sqlSelection.toLine}:{sqlSelection.toColumn} · {sqlSelection.to - sqlSelection.from}文字</span>}<span className="sql-editor-hint">コメント切替 <kbd>⌘/</kbd> · 候補 <kbd>⌃Space</kbd></span></div><SqlEditor ref={sqlEditorRef} value={sql} onChange={setSql} onRun={(from, to) => { if (!runningSqlTab) void runSql(from, to); }} getCompletions={getSqlCompletions} onSelectionChange={setSqlSelection}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={Boolean(activeSqlTab?.running)} onQuickFilter={() => undefined} onExport={sqlPage ? (format) => exportPage(sqlPage, connectionQueries.find((query) => query.id === selectedQueryId)?.name ?? activeSqlTab?.title ?? "query-results", format) : undefined}/></div> : activeTab ? <div className="table-workspace">
         <nav className="table-view-tabs" aria-label="テーブル表示"><button className={activeTab.view === "content" ? "active" : ""} onClick={() => void selectTableView("content")}>内容</button><button className={activeTab.view === "structure" ? "active" : ""} onClick={() => void selectTableView("structure")}>構造</button><button className={activeTab.view === "ddl" ? "active" : ""} onClick={() => void selectTableView("ddl")}>DDL</button></nav>
         {activeTab.view === "content" ? <><FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/><DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} inserts={activeTab.inserts} onInsertsChange={(inserts) => patchTab(activeTab.id, {inserts})} deletedRows={activeTab.deletedRows} onDeletedRowsChange={(deletedRows) => patchTab(activeTab.id, {deletedRows})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onOpenForeignTable={openForeignTable} onFollowForeignKey={followForeignKey} onExport={activeTab.page ? (format) => exportPage(activeTab.page!, `${activeTab.table.schema}.${activeTab.table.name}`, format) : undefined} onApplyChanges={active?.readOnly ? undefined : applyTableChanges}/></> : activeTab.view === "structure" ? <div className="structure-view"><table><thead><tr><th>カラム</th><th>データ型</th><th>NULL</th><th>キー</th><th>参照先</th></tr></thead><tbody>{activeTab.columns.map((column) => <tr key={column.name}><td>{column.name}</td><td><code>{column.dataType}</code></td><td>{column.nullable ? "YES" : "NO"}</td><td>{column.primaryKey ? "PRIMARY KEY" : column.foreignKey ? "FOREIGN KEY" : ""}</td><td>{column.foreignKey ? `${column.foreignKey.schema}.${column.foreignKey.table}.${column.foreignKey.column}` : ""}</td></tr>)}</tbody></table></div> : <div className="ddl-view"><div className="ddl-toolbar"><span>{activeTab.table.schema}.{activeTab.table.name}</span><button disabled={!activeTab.ddl} onClick={() => activeTab.ddl && void navigator.clipboard.writeText(activeTab.ddl)}><Copy size={13}/>コピー</button></div><pre><code>{activeTab.ddl ?? (loading ? "DDLを取得中…" : "DDLを取得できませんでした")}</code></pre></div>}
       </div> : <div className="empty-state"><Table2 size={36}/><p>左側からテーブルを選択してください</p></div>}

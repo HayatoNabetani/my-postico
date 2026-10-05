@@ -1977,3 +1977,41 @@ body,
   cursor: row-resize !important;
   user-select: none !important;
 }
+.app-shell.connections-in-home {
+  grid-template-columns: var(--object-width, 260px) var(--object-resizer-width, 5px) minmax(0, 1fr);
+}
+
+.connections-in-home .topbar {
+  padding-left: 80px;
+}
+
+.connections-in-home .object-sidebar > header {
+  padding-left: 80px;
+}
+
+.connections-in-home .object-sidebar.sidebar-collapsed .sidebar-expand {
+  margin-top: 38px;
+}
+
+.saved-connections-home {
+  margin-bottom: 28px;
+  min-width: 0;
+}
+
+.saved-connections-home h2 {
+  font-size: 14px;
+  color: var(--text-muted, #989eaa);
+  margin: 0 0 12px;
+}
+
+.saved-connections-home .connection-list {
+  max-height: 280px;
+  overflow: auto;
+  padding: 0;
+}
+
+.saved-connections-home .connection-card,
+.saved-connections-home .connection-main,
+.saved-connections-home .connection-main > span {
+  min-width: 0;
+}
