@@ -1,8 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseEngine {
+    #[default]
+    Postgres,
+    Mysql,
+    Mariadb,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
+    #[serde(default)]
+    pub engine: DatabaseEngine,
     pub id: String,
     pub name: String,
     pub host: String,
@@ -127,4 +138,23 @@ pub struct TableChangeResult {
     pub inserted: u64,
     pub updated: u64,
     pub deleted: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn existing_profiles_default_to_postgres_without_losing_settings() {
+        let old = serde_json::json!({"id":"existing-id", "name":"Production", "host":"db.internal", "port":5432, "database":"app", "username":"app", "sslMode":"verifyFull", "environment":"Production", "readOnly":true, "ssh":{"enabled":true,"host":"bastion","port":22,"username":"app","authMethod":"agent","privateKeyPath":"","trustedFingerprint":"SHA256:existing"}});
+        let mut profile: ConnectionProfile = serde_json::from_value(old).unwrap();
+        assert_eq!(profile.engine, DatabaseEngine::Postgres);
+        assert_eq!(profile.id, "existing-id");
+        assert_eq!(profile.ssl_mode, "verifyFull");
+        assert_eq!(profile.ssh.trusted_fingerprint.as_deref(), Some("SHA256:existing"));
+        for engine in [DatabaseEngine::Postgres, DatabaseEngine::Mysql, DatabaseEngine::Mariadb] {
+            profile.engine = engine;
+            let restored: ConnectionProfile = serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+            assert_eq!(restored.engine, engine);
+        }
+    }
 }

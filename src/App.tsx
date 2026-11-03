@@ -1,12 +1,15 @@
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Circle, Clock3, Copy, Database, FileCode2, FilePlus2, Folder, FolderPlus, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCw, Search, Server, Shield, Square, Table2, Trash2, Unplug, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, Circle, Clock3, Copy, Database, FileCode2, FilePlus2, Folder, FolderPlus, LoaderCircle, Network, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCw, Search, Server, Shield, Square, Table2, Trash2, Unplug, Upload, X } from "lucide-react";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { DataGrid } from "./components/DataGrid";
+import { ErDiagram } from "./components/ErDiagram";
 import { emptyFilter, FilterBuilder, newCondition } from "./components/FilterBuilder";
 import { SqlEditor, type SqlCompletionItem, type SqlEditorHandle, type SqlSelection } from "./components/SqlEditor";
 import * as api from "./lib/api";
 import { exportFileName, serializeQueryPage, type ExportFormat } from "./lib/export";
+import { nextSort, sortByName, SQL_RESULT_PAGE_SIZE, type ListSort } from "./lib/grid";
 import { statementForExecution } from "./lib/sql";
+import { databaseLabels, objectTemplate, quoteIdentifier as quoteSqlIdentifier, relationReferences, type ObjectKind } from "./lib/dialect";
 import type { ColumnInfo, ConnectionProfile, FilterGroup, ForeignKeyInfo, FunctionInfo, PendingTableRow, ProfileSecrets, QueryFolder, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableChanges, TableInfo } from "./types";
 
 type DialogState = { open: false } | { open: true; profile?: ConnectionProfile };
@@ -40,6 +43,7 @@ interface SqlTab {
   title: string;
   sql: string;
   page?: QueryPage;
+  resultOffset?: number;
   savedQueryId: string;
   folderId: string;
   running?: boolean;
@@ -122,6 +126,9 @@ export default function App() {
   const [activeSqlTabId, setActiveSqlTabId] = useState(() => "");
   const [queryContextMenu, setQueryContextMenu] = useState<QueryContextMenu>();
   const [tableContextMenu, setTableContextMenu] = useState<TableContextMenu>();
+  const [erTarget, setErTarget] = useState<{schema: string; table?: string}>();
+  const [tableNameSort, setTableNameSort] = useState<ListSort>();
+  const [columnNameSort, setColumnNameSort] = useState<ListSort>();
   const [objectBrowserMode, setObjectBrowserMode] = useState<ObjectBrowserMode>("tables");
   const [collapsedQueryFolders, setCollapsedQueryFolders] = useState<Record<string, boolean>>({});
   const [collapsedSchemas, setCollapsedSchemas] = useState<Record<string, boolean>>({});
@@ -159,6 +166,7 @@ export default function App() {
   const runningSqlTab = sqlTabs.find((tab) => tab.running);
   const sql = activeSqlTab?.sql ?? "";
   const sqlPage = activeSqlTab?.page;
+  const sqlResultOffset = activeSqlTab?.resultOffset ?? 0;
   const selectedQueryId = activeSqlTab?.savedQueryId ?? "";
   const selectedQueryFolderId = activeSqlTab?.folderId ?? "";
   const selectedTable = activeTab?.table;
@@ -171,13 +179,14 @@ export default function App() {
   const openConnectionProfiles = useMemo(() => openConnectionIds.map((id) => profiles.find((profile) => profile.id === id)).filter((profile): profile is ConnectionProfile => Boolean(profile)), [openConnectionIds, profiles]);
   const sqlCatalogCompletions = useMemo(() => {
     const options: SqlCompletionItem[] = [];
-    for (const schema of schemas) options.push({label: schema.name, type: "class", detail: "スキーマ", boost: 20});
+    for (const schema of schemas) options.push({label: schema.name, type: "class", detail: active?.engine === "postgres" ? "スキーマ" : "データベース", boost: 20});
     for (const [schema, schemaTables] of Object.entries(tables)) for (const table of schemaTables) options.push({label: table.name, type: "class", detail: `${schema} · ${table.kind === "view" ? "ビュー" : "テーブル"}`, boost: 50});
     for (const [schema, schemaFunctions] of Object.entries(functions)) for (const item of schemaFunctions) options.push({label: item.name, type: "function", detail: `${schema} · ${item.arguments || "引数なし"}`, apply: `${item.name}()`, boost: 45});
     for (const keyword of SQL_KEYWORDS) options.push({label: keyword, type: "keyword"});
-    for (const fn of SQL_BUILTIN_FUNCTIONS) options.push({label: fn, type: "function", apply: `${fn}()`});
+    if (active?.engine !== "postgres") for (const keyword of ["SHOW", "SHOW CREATE TABLE", "DESCRIBE", "USE", "EXPLAIN", "CALL", "AUTO_INCREMENT"]) options.push({label: keyword, type: "keyword"});
+    for (const fn of active?.engine === "postgres" ? SQL_BUILTIN_FUNCTIONS : ["COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "NOW", "DATE_FORMAT", "GROUP_CONCAT", "JSON_OBJECT", "JSON_EXTRACT", "IFNULL", "CONCAT"]) options.push({label: fn, type: "function", apply: `${fn}()`});
     return options;
-  }, [schemas, tables, functions]);
+  }, [schemas, tables, functions, active?.engine]);
 
   useEffect(() => { api.listProfiles().then(setProfiles).catch((reason) => setError(String(reason))); }, []);
   useEffect(() => { localStorage.setItem("my-postico:object-width", String(objectWidth)); }, [objectWidth]);
@@ -316,7 +325,7 @@ export default function App() {
     setSavedQueries(next);
     api.persistSavedQueries(next);
   }
-  function setSqlPage(page: QueryPage | undefined) { patchActiveSqlTab({page}); }
+  function setSqlPage(page: QueryPage | undefined) { patchActiveSqlTab({page, resultOffset: 0}); }
 
   function addSqlTab(folderId = "") {
     if (!active || !connected) { setError("SQLファイルを作成するにはデータベースへ接続してください"); return; }
@@ -343,7 +352,7 @@ export default function App() {
     setTableContextMenu({x: Math.max(8, Math.min(event.clientX, window.innerWidth - 260)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 620)), table, schema: schema ?? table?.schema});
   }
 
-  function quoteIdentifier(value: string) { return `"${value.replaceAll('"', '""')}"`; }
+  function quoteIdentifier(value: string) { return quoteSqlIdentifier(value, active?.engine ?? "postgres"); }
   function qualifiedName(table: TableInfo) { return `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.name)}`; }
 
   function openSqlTemplate(title: string, template: string) {
@@ -358,17 +367,10 @@ export default function App() {
     requestAnimationFrame(() => sqlEditorRef.current?.focus());
   }
 
-  function createObjectTemplate(kind: "table" | "view" | "materialized_view" | "function" | "procedure" | "schema", schemaName?: string) {
-    const schema = quoteIdentifier(schemaName || schemas.find((item) => item.name === "public")?.name || schemas[0]?.name || "public");
-    const templates = {
-      table: [`New Table`, `CREATE TABLE ${schema}."new_table" (\n  "id" bigserial PRIMARY KEY,\n  "created_at" timestamptz NOT NULL DEFAULT now()\n);`],
-      view: [`New View`, `CREATE VIEW ${schema}."new_view" AS\nSELECT 1 AS "value";`],
-      materialized_view: [`New Materialized View`, `CREATE MATERIALIZED VIEW ${schema}."new_materialized_view" AS\nSELECT 1 AS "value";`],
-      function: [`New Function`, `CREATE FUNCTION ${schema}."new_function"()\nRETURNS void\nLANGUAGE plpgsql\nAS $$\nBEGIN\n  -- 処理を記述\nEND;\n$$;`],
-      procedure: [`New Procedure`, `CREATE PROCEDURE ${schema}."new_procedure"()\nLANGUAGE plpgsql\nAS $$\nBEGIN\n  -- 処理を記述\nEND;\n$$;`],
-      schema: [`New Schema`, `CREATE SCHEMA "new_schema";`],
-    } satisfies Record<string, [string, string]>;
-    openSqlTemplate(templates[kind][0], templates[kind][1]);
+  function createObjectTemplate(kind: ObjectKind, schemaName?: string) {
+    const schema = schemaName || (active?.engine === "postgres" ? schemas.find((item) => item.name === "public")?.name : active?.database) || schemas[0]?.name || "public";
+    const [title, template] = objectTemplate(kind, schema, active?.engine ?? "postgres");
+    openSqlTemplate(title, template);
   }
 
   async function refreshObjectCatalog() {
@@ -441,10 +443,15 @@ export default function App() {
       if (!confirm(`${qualifiedName(table)} に ${rows.length.toLocaleString()} 行を追加します。続けますか？`)) return;
       if (active.environment.toLocaleLowerCase() === "production" && !confirm("Production接続へのCSVインポートです。本当に実行しますか？")) return;
       setLoading(true); setError("");
-      const columns = headers.map(quoteIdentifier).join(", ");
       for (let offset = 0; offset < rows.length; offset += 200) {
-        const values = rows.slice(offset, offset + 200).map((row) => `(${row.map((value) => value === "" ? "NULL" : `'${value.replaceAll("'", "''").replaceAll("\0", "")}'`).join(", ")})`).join(",\n");
-        await api.executeSql(active.id, `INSERT INTO ${qualifiedName(table)} (${columns}) VALUES\n${values}`);
+        if (active.engine === "postgres") {
+          const columns = headers.map(quoteIdentifier).join(", ");
+          const values = rows.slice(offset, offset + 200).map((row) => `(${row.map((value) => value === "" ? "NULL" : `'${value.replaceAll("'", "''").replaceAll("\0", "")}'`).join(", ")})`).join(",\n");
+          await api.executeSql(active.id, `INSERT INTO ${qualifiedName(table)} (${columns}) VALUES\n${values}`);
+        } else {
+          const inserts = rows.slice(offset, offset + 200).map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] === "" || row[index] === undefined ? null : row[index]])));
+          await api.applyTableChanges(active.id, table.schema, table.name, {inserts, updates: [], deletes: []});
+        }
         setStatus(`CSVをインポート中… ${Math.min(offset + 200, rows.length).toLocaleString()} / ${rows.length.toLocaleString()} 行`);
       }
       if (activeTab?.table.schema === table.schema && activeTab.table.name === table.name) await applyFilter(activeTab.appliedFilter, 0, activeTab.sorts);
@@ -685,11 +692,12 @@ export default function App() {
   async function runSql(selectionFrom?: number, selectionTo?: number) {
     if (!active || !activeSqlTab || runningSqlTab) return;
     const selection = selectionFrom === undefined || selectionTo === undefined ? sqlEditorRef.current?.selection() : {from: selectionFrom, to: selectionTo};
-    const statement = statementForExecution(sql, selection?.from ?? 0, selection?.to ?? 0);
+    const statement = statementForExecution(sql, selection?.from ?? 0, selection?.to ?? 0, active.engine);
     if (!statement) { setError("実行するSQLを入力してください"); return; }
-    const statementForSafety = statement.replace(/^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/, "");
-    const writesData = !/^\s*(select|values|explain)\b/i.test(statementForSafety);
-    if (writesData && active.readOnly) { setError("読み取り専用接続では書き込みSQLを実行できません"); return; }
+    const statementForSafety = statement.replace(active.engine === "postgres" ? /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/ : /^(?:\s|--\s[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|\/\*(?!!|M!)[\s\S]*?\*\/)+/i, "");
+    const multipleStatements = active.engine !== "postgres" && statementForExecution(statement, 0, 0, active.engine).replace(/;+\s*$/, "").trim() !== statement.replace(/;+\s*$/, "").trim();
+    const writesData = multipleStatements || !(active.engine === "postgres" ? /^\s*(select|values|explain)\b/i : /^\s*(select|values|explain|show|describe|desc)\b/i).test(statementForSafety);
+    if (writesData && active.readOnly && !(active.engine !== "postgres" && !multipleStatements && /^\s*with\b/i.test(statementForSafety))) { setError("読み取り専用接続では書き込みSQLを実行できません"); return; }
     if (writesData && active.environment.toLocaleLowerCase() === "production" && !confirm("Production接続で書き込みSQLを実行します。続けますか？")) return;
     const tabId = activeSqlTab.id;
     const startedAt = Date.now();
@@ -698,11 +706,11 @@ export default function App() {
     setExecutionClock(startedAt); setError(""); setStatus("SQLを実行中…");
     try {
       const page = await api.executeSql(active.id, statement);
-      patchSqlTab(tabId, {page});
+      patchSqlTab(tabId, {page, resultOffset: 0});
       if (/^\s*(create|alter|drop|truncate|refresh)\b/i.test(statement)) await refreshObjectCatalog();
       setStatus(`SQLを実行しました（${formatDuration(Date.now() - startedAt)}）`);
     } catch (reason) {
-      if (cancelledSqlTabs.current.has(tabId) && String(reason).includes("57014")) setStatus(`SQLをキャンセルしました（${formatDuration(Date.now() - startedAt)}）`);
+      if (cancelledSqlTabs.current.has(tabId) && /57014|MySQL error: 1317|MySQL error: 1927/.test(String(reason))) setStatus(`SQLをキャンセルしました（${formatDuration(Date.now() - startedAt)}）`);
       else { setError(String(reason)); setStatus("SQL実行に失敗しました"); }
     } finally {
       const duration = Date.now() - startedAt;
@@ -727,19 +735,11 @@ export default function App() {
   async function getSqlCompletions(text: string, position: number): Promise<SqlCompletionItem[]> {
     if (!active) return [];
     const beforeCursor = text.slice(Math.max(0, text.lastIndexOf(";", position - 1) + 1), position);
-    const reserved = new Set(["where", "join", "left", "right", "full", "inner", "outer", "cross", "on", "group", "order", "limit", "offset", "union", "having"]);
-    const references: Array<{schema: string; table: string; alias?: string}> = [];
-    const relationPattern = /\b(?:from|join)\s+(?:(?:"([^"]+)"|([a-z_$][\w$]*))\s*\.\s*)?(?:"([^"]+)"|([a-z_$][\w$]*))(?:\s+(?:as\s+)?(?:"([^"]+)"|([a-z_$][\w$]*)))?/gi;
-    let match: RegExpExecArray | null;
-    while ((match = relationPattern.exec(beforeCursor))) {
-      const schemaToken = match[1] ?? match[2];
-      const tableName = match[3] ?? match[4];
-      const aliasToken = match[5] ?? match[6];
-      const schemaName = schemaToken ?? (tables.public?.some((table) => table.name === tableName) ? "public" : Object.keys(tables).find((schema) => tables[schema]?.some((table) => table.name === tableName)) ?? "public");
-      references.push({schema: schemaName, table: tableName, alias: aliasToken && !reserved.has(aliasToken.toLocaleLowerCase()) ? aliasToken : undefined});
-    }
+    const references = relationReferences(beforeCursor).map((reference) => ({...reference,
+      schema: reference.schema ?? (active.database && tables[active.database]?.some((table) => table.name === reference.table) ? active.database : tables.public?.some((table) => table.name === reference.table) ? "public" : Object.keys(tables).find((schema) => tables[schema]?.some((table) => table.name === reference.table)) ?? active.database ?? "public"),
+    }));
 
-    const qualifier = /(?:"([^"]+)"|([a-z_$][\w$]*))\.\s*[\w$]*$/i.exec(beforeCursor)?.slice(1).find(Boolean);
+    const qualifier = /(?:`([^`]+)`|"([^"]+)"|([a-z_$][\w$]*))\.\s*[\w$]*$/i.exec(beforeCursor)?.slice(1).find(Boolean);
     const matchingSchema = qualifier && tables[qualifier];
     if (matchingSchema) return matchingSchema.map((table) => ({label: table.name, type: "class", detail: table.kind === "view" ? "ビュー" : qualifier}));
 
@@ -882,13 +882,13 @@ export default function App() {
   const sqlStyle = {"--sql-editor-height": `${sqlEditorHeight}px`} as CSSProperties;
   const objectSidebarStyle = {"--query-pane-height": `${queryPaneHeight}px`} as CSSProperties;
 
-  return <div className="app-shell connections-in-home" style={shellStyle}>
+  return <div autoCapitalize="none" autoCorrect="off" spellCheck={false} className="app-shell connections-in-home" style={shellStyle}>
     <aside className={`object-sidebar ${objectSidebarCollapsed ? "sidebar-collapsed" : ""}`} style={objectSidebarStyle}>
       {objectSidebarCollapsed ? <button className="sidebar-expand" title="Queries / Tablesを開く（⌘Bですべて切替）" aria-label="Queries / Tablesを開く" onClick={() => setObjectSidebarCollapsed(false)}><PanelLeftOpen size={16}/></button> : <>
       <header data-tauri-drag-region><div data-tauri-drag-region><Server size={16}/><strong data-tauri-drag-region>{active?.database ?? "Database"}</strong></div><div className="sidebar-header-actions"><button title="Queries / Tablesを折りたたむ（⌘Bですべて切替）" aria-label="Queries / Tablesを折りたたむ" onClick={() => setObjectSidebarCollapsed(true)}><PanelLeftClose size={15}/></button><button title="再読み込み" aria-label="再読み込み" disabled={!connected} onClick={() => active && void connect(active, {force: true})}><RefreshCw size={14}/></button></div></header>
       <section className="browser-pane query-browser-pane">
         <div className="browser-pane-heading"><span><FileCode2 size={13}/>QUERIES</span><div><button disabled={!connected} title="クエリーフォルダを作成" onClick={createQueryFolder}><FolderPlus size={14}/></button><button disabled={!connected} title="新しいSQL Query" onClick={() => addSqlTab()}><Plus size={15}/></button></div></div>
-        <div className="object-search"><Search size={13}/><input disabled={!connected} value={querySearch} onChange={(event) => setQuerySearch(event.target.value)} placeholder="クエリーを検索" aria-label="保存済みクエリーを検索"/>{querySearch && <button title="検索をクリア" onClick={() => setQuerySearch("")}><X size={12}/></button>}</div>
+        <div className="object-search"><Search size={13}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={!connected} value={querySearch} onChange={(event) => setQuerySearch(event.target.value)} placeholder="クエリーを検索" aria-label="保存済みクエリーを検索"/>{querySearch && <button title="検索をクリア" onClick={() => setQuerySearch("")}><X size={12}/></button>}</div>
         {!connected ? <div className="browser-pane-empty">接続すると保存済みクエリーが<br/>ここに表示されます</div> : <div className="query-tree" onContextMenu={(event) => openQueryContextMenu(event)}>{visibleUnfiledQueries.map((query) => <button key={query.id} className={sqlOpen && selectedQueryId === query.id ? "selected" : ""} onClick={() => openSavedQuery(query)} onContextMenu={(event) => openQueryContextMenu(event, query.folderId, query.id)}><FileCode2 size={14}/><span>{query.name}</span></button>)}{connectionQueryFolders.map((folder) => {
           const folderMatches = folder.name.toLocaleLowerCase().includes(normalizedQuerySearch);
           const folderQueries = connectionQueries.filter((query) => query.folderId === folder.id && (!normalizedQuerySearch || folderMatches || query.name.toLocaleLowerCase().includes(normalizedQuerySearch))).sort((a, b) => a.name.localeCompare(b.name, "ja"));
@@ -900,12 +900,12 @@ export default function App() {
       <div className="object-pane-resize" role="separator" aria-label="QueriesとTablesの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginQueryPaneResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setQueryPaneHeight(clamp(queryPaneHeight + (event.key === "ArrowDown" ? 10 : -10), 120, Math.max(160, window.innerHeight - 260))); }} onDoubleClick={() => setQueryPaneHeight(DEFAULT_QUERY_PANE_HEIGHT)}/>
       <section className="browser-pane table-browser-pane">
         <div className="object-type-tabs"><button className={objectBrowserMode === "tables" ? "active" : ""} onClick={() => { setObjectBrowserMode("tables"); setObjectSearch(""); }}><Table2 size={13}/>Tables</button><button className={objectBrowserMode === "functions" ? "active" : ""} onClick={() => { setObjectBrowserMode("functions"); setObjectSearch(""); }}><span className="function-symbol">ƒ</span>Functions</button><button className="object-create-button" title="新しいデータベースオブジェクト" onClick={(event) => openTableContextMenu(event, undefined, schemas.find((item) => item.name === "public")?.name)}><Plus size={15}/></button></div>
-        <div className="object-search"><Search size={13}/><input ref={objectSearchRef} disabled={!connected} value={objectSearch} onChange={(event) => setObjectSearch(event.target.value)} placeholder={objectBrowserMode === "tables" ? "テーブルを検索" : "関数を検索"} aria-label={objectBrowserMode === "tables" ? "スキーマ、テーブル、ビューを検索" : "関数、プロシージャを検索"}/>{objectSearch && <button title="検索をクリア" onClick={() => { setObjectSearch(""); objectSearchRef.current?.focus(); }}><X size={12}/></button>}</div>
-        {!connected ? <div className="browser-pane-empty">接続するとスキーマが<br/>ここに表示されます</div> : <div className="schema-tree" onContextMenu={(event) => openTableContextMenu(event)}>{schemas.map((schema) => {
+        <div className="object-search"><Search size={13}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} ref={objectSearchRef} disabled={!connected} value={objectSearch} onChange={(event) => setObjectSearch(event.target.value)} placeholder={objectBrowserMode === "tables" ? "テーブルを検索" : "関数を検索"} aria-label={objectBrowserMode === "tables" ? `${active?.engine === "postgres" ? "スキーマ" : "データベース"}、テーブル、ビューを検索` : "関数、プロシージャを検索"}/><button className="list-sort-button" disabled={!connected} aria-label={`テーブル名の並び順: ${tableNameSort === "desc" ? "降順" : tableNameSort === "asc" ? "昇順" : "元の順番"}`} title="名前のソート: 降順 → 昇順 → 元の順番" onClick={() => setTableNameSort(nextSort(tableNameSort))}>{tableNameSort === "desc" ? <ArrowDown size={13}/> : tableNameSort === "asc" ? <ArrowUp size={13}/> : <ArrowUpDown size={13}/>}</button>{objectSearch && <button title="検索をクリア" onClick={() => { setObjectSearch(""); objectSearchRef.current?.focus(); }}><X size={12}/></button>}</div>
+        {!connected ? <div className="browser-pane-empty">接続すると{active?.engine && active.engine !== "postgres" ? "データベース" : "スキーマ"}が<br/>ここに表示されます</div> : <div className="schema-tree" onContextMenu={(event) => openTableContextMenu(event)}>{schemas.map((schema) => {
           const query = objectSearch.trim().toLocaleLowerCase();
           const matchesSchema = schema.name.toLocaleLowerCase().includes(query);
-          const schemaTables = (tables[schema.name] ?? []).filter((table) => !query || matchesSchema || table.name.toLocaleLowerCase().includes(query));
-          const schemaFunctions = (functions[schema.name] ?? []).filter((item) => !query || matchesSchema || item.name.toLocaleLowerCase().includes(query) || item.arguments.toLocaleLowerCase().includes(query));
+          const schemaTables = sortByName((tables[schema.name] ?? []).filter((table) => !query || matchesSchema || table.name.toLocaleLowerCase().includes(query)), tableNameSort);
+          const schemaFunctions = sortByName((functions[schema.name] ?? []).filter((item) => !query || matchesSchema || item.name.toLocaleLowerCase().includes(query) || item.arguments.toLocaleLowerCase().includes(query)), tableNameSort);
           const functionLimit = functionRenderLimits[schema.name] ?? FUNCTION_RENDER_BATCH;
           const renderedFunctions = schemaFunctions.slice(0, functionLimit);
           const visibleItems = objectBrowserMode === "tables" ? schemaTables : schemaFunctions;
@@ -920,16 +920,16 @@ export default function App() {
     <div className={`resize-handle column-resize-handle ${showConnectionHome || objectSidebarCollapsed ? "collapsed-resizer" : ""}`} role="separator" aria-label="オブジェクトサイドバーの幅を変更" aria-orientation="vertical" tabIndex={showConnectionHome || objectSidebarCollapsed ? -1 : 0} onPointerDown={(event) => beginHorizontalResize(event, objectWidth, setObjectWidth, 160, 480)} onKeyDown={(event) => resizeWithKeyboard(event, objectWidth, setObjectWidth, 160, 480)} onDoubleClick={() => setObjectWidth(DEFAULT_OBJECT_WIDTH)}/>
 
     <main className="workspace">
-      <header className="topbar" data-tauri-drag-region><div className="breadcrumbs" data-tauri-drag-region><Database size={14}/><span data-tauri-drag-region>{connectionHomeActive ? "New connection" : active?.name ?? "No connection"}</span>{!connectionHomeActive && !sqlOpen && selectedTable && <><b data-tauri-drag-region>/</b><span data-tauri-drag-region>{selectedTable.schema}</span><b data-tauri-drag-region>/</b><strong data-tauri-drag-region>{selectedTable.name}</strong></>}</div><div className="status-cluster">{!connectionHomeActive && active?.readOnly && <span className="readonly"><Shield size={12}/>READ ONLY</span>}<span className={error ? "status-error" : connected && !connectionHomeActive ? "online" : "offline"}><Circle size={8} fill="currentColor"/>{connectionHomeActive ? "接続情報を入力してください" : status}</span>{connected && !connectionHomeActive && <button className="icon-button" title="切断" onClick={() => void disconnect()}><Unplug size={15}/></button>}</div></header>
+      <header className="topbar" data-tauri-drag-region><div className="breadcrumbs" data-tauri-drag-region><Database size={14}/><span data-tauri-drag-region>{connectionHomeActive ? "New connection" : active?.name ?? "No connection"}</span>{!connectionHomeActive && !sqlOpen && selectedTable && <><b data-tauri-drag-region>/</b><span data-tauri-drag-region>{selectedTable.schema}</span><b data-tauri-drag-region>/</b><strong data-tauri-drag-region>{selectedTable.name}</strong></>}</div><div className="status-cluster">{!connectionHomeActive && active?.readOnly && <span className="readonly"><Shield size={12}/>READ ONLY</span>}<span className={error ? "status-error" : connected && !connectionHomeActive ? "online" : "offline"}><Circle size={8} fill="currentColor"/>{connectionHomeActive ? "接続情報を入力してください" : status}</span>{connected && !connectionHomeActive && <button className="icon-button" title="スキーマのER図を表示" aria-label="ER図を表示" disabled={!schemas.length || loading || Boolean(runningSqlTab)} onClick={() => setErTarget({schema: selectedTable?.schema ?? schemas[0].name})}><Network size={15}/>ER図</button>}{connected && !connectionHomeActive && <button className="icon-button" title="切断" onClick={() => void disconnect()}><Unplug size={15}/></button>}</div></header>
       {(openConnectionProfiles.length > 0 || connectionPickerOpen || !connected) && <div className="connection-tabbar"><div className="connection-tabs">{openConnectionProfiles.map((profile) => <div className={`connection-workspace-tab ${!connectionHomeActive && active?.id === profile.id ? "active" : ""}`} key={profile.id}><button className="connection-tab-select" disabled={loading || Boolean(runningSqlTab)} onClick={() => void connect(profile)}><span className={`environment-dot ${profile.environment.toLowerCase()}`}/><Database size={14}/><span>{profile.name}</span></button><button className="connection-tab-close" disabled={loading || Boolean(runningSqlTab)} title={`${profile.name} を閉じる`} onClick={() => void closeConnectionTab(profile.id)}><X size={12}/></button></div>)}{(connectionPickerOpen || !connected) && <div className={`connection-workspace-tab new-connection-tab ${connectionHomeActive || !connected ? "active" : ""}`}><button className="connection-tab-select" onClick={() => { rememberActiveWorkspace(); setConnectionPickerOpen(true); setConnectionHomeActive(true); }}><Plus size={14}/><span>新しい接続</span></button>{openConnectionProfiles.length > 0 && <button className="connection-tab-close" title="新しい接続を閉じる" onClick={() => { setConnectionPickerOpen(false); setConnectionHomeActive(false); }}><X size={12}/></button>}</div>}</div><button className="connection-tab-add" title="新しい接続（⌘T）" onClick={() => { rememberActiveWorkspace(); setConnectionPickerOpen(true); setConnectionHomeActive(true); setNewConnectionFocusRequest((current) => current + 1); }}><Plus size={15}/></button></div>}
       {connected && !connectionHomeActive && <div className="tabbar"><div className="table-tabs">{tableTabs.map((tab) => <div className={`table-tab ${!sqlOpen && tab.id === activeTableTabId ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveTableTabId(tab.id); setSqlOpen(false); }}><Table2 size={14}/><span>{tab.table.name}</span>{hasPendingChanges(tab) && <i title="未反映の変更あり"/>}</button><button className="tab-close" title="タブを閉じる" onClick={() => closeTableTab(tab.id)}><X size={12}/></button></div>)}{sqlTabs.map((tab) => <div className={`table-tab sql-file-tab ${sqlOpen && tab.id === activeSqlTab?.id ? "active" : ""}`} key={tab.id}><button className="tab-select" onClick={() => { setActiveSqlTabId(tab.id); setSqlOpen(true); }}><FileCode2 size={14}/><span>{tab.title}</span>{tab.running && <LoaderCircle className="tab-running-spinner" size={11}/>}</button><button className="tab-close" disabled={tab.running} title={tab.running ? "実行中は閉じられません" : "SQLタブを閉じる"} onClick={() => closeSqlTab(tab.id)}><X size={12}/></button></div>)}</div></div>}
       {error && <div className="error-banner workspace-error">{error}<button onClick={() => setError("")}><Trash2 size={13}/></button></div>}
       {showConnectionHome ? <section className="connection-welcome"><div className="connection-welcome-card"><section className="saved-connections-home"><h2>保存済みの接続</h2>      <div className="connection-list">{profiles.map((profile, index) => <div className={`connection-card ${active?.id === profile.id ? "active" : ""}`} key={profile.id}>
-        <button className="connection-main" title={index < 9 ? `接続（⌘${index + 1}）` : undefined} onClick={() => void connect(profile)}><span className={`environment-dot ${profile.environment.toLowerCase()}`}/><span><strong>{profile.name}</strong><small>{profile.username}@{profile.host}</small></span>{index < 9 && <kbd className="connection-shortcut">⌘{index + 1}</kbd>}</button>
+        <button className="connection-main" title={index < 9 ? `接続（⌘${index + 1}）` : undefined} onClick={() => void connect(profile)}><span className={`environment-dot ${profile.environment.toLowerCase()}`}/><span><strong>{profile.name}</strong><small>{databaseLabels[profile.engine ?? "postgres"]} · {profile.username}@{profile.host}</small></span>{index < 9 && <kbd className="connection-shortcut">⌘{index + 1}</kbd>}</button>
         <div className="connection-actions"><button title="編集" onClick={() => setDialog({open: true, profile})}><Pencil size={13}/></button><button title="削除" onClick={() => void removeProfile(profile)}><Trash2 size={13}/></button></div>
-      </div>)}</div>{profiles.length === 0 && <p>保存済みの接続はありません。</p>}</section><header className="connection-welcome-header"><div className="connection-welcome-icon"><Database size={25}/></div><div><h1>データベースに接続</h1><p>上の一覧から接続先を選ぶか、新しい接続を作成してください。</p></div></header><div className="connection-start-grid"><ConnectionDialog embedded focusRequest={newConnectionFocusRequest} onClose={() => undefined} onSave={saveProfile}/></div></div></section> : sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || Boolean(runningSqlTab)} title="実行（⌘↵）" onClick={() => void runSql()}><Play size={13}/>実行<kbd>⌘↵</kbd></button>{runningSqlTab && <><span className="sql-running-status"><LoaderCircle size={13}/><strong>{runningSqlTab.title}</strong> を実行中 · {formatDuration(executionClock - (runningSqlTab.executionStartedAt ?? executionClock))}</span><button className="sql-cancel-button" disabled={runningSqlTab.cancelRequested} onClick={() => void cancelRunningSql()}><Square size={11}/>{runningSqlTab.cancelRequested ? "キャンセル中…" : "キャンセル"}</button></>}{!runningSqlTab && activeSqlTab?.executionDurationMs !== undefined && <span className="sql-duration"><Clock3 size={12}/>実行時間 {formatDuration(activeSqlTab.executionDurationMs)}</span>}{sqlSelection && <span className="sql-selection-status">選択 {sqlSelection.fromLine}:{sqlSelection.fromColumn}–{sqlSelection.toLine}:{sqlSelection.toColumn} · {sqlSelection.to - sqlSelection.from}文字</span>}<span className="sql-editor-hint">コメント切替 <kbd>⌘/</kbd> · 候補 <kbd>⌃Space</kbd></span></div><SqlEditor ref={sqlEditorRef} value={sql} onChange={setSql} onRun={(from, to) => { if (!runningSqlTab) void runSql(from, to); }} getCompletions={getSqlCompletions} onSelectionChange={setSqlSelection}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid page={sqlPage} loading={Boolean(activeSqlTab?.running)} onQuickFilter={() => undefined} onExport={sqlPage ? (format) => exportPage(sqlPage, connectionQueries.find((query) => query.id === selectedQueryId)?.name ?? activeSqlTab?.title ?? "query-results", format) : undefined}/></div> : activeTab ? <div className="table-workspace">
+      </div>)}</div>{profiles.length === 0 && <p>保存済みの接続はありません。</p>}</section><header className="connection-welcome-header"><div className="connection-welcome-icon"><Database size={25}/></div><div><h1>データベースに接続</h1><p>上の一覧から接続先を選ぶか、新しい接続を作成してください。</p></div></header><div className="connection-start-grid"><ConnectionDialog embedded focusRequest={newConnectionFocusRequest} onClose={() => undefined} onSave={saveProfile}/></div></div></section> : sqlOpen ? <div className="sql-workspace" style={sqlStyle}><div className="sql-toolbar"><button className="primary compact" disabled={!connected || Boolean(runningSqlTab)} title="実行（⌘↵）" onClick={() => void runSql()}><Play size={13}/>実行<kbd>⌘↵</kbd></button>{runningSqlTab && <><span className="sql-running-status"><LoaderCircle size={13}/><strong>{runningSqlTab.title}</strong> を実行中 · {formatDuration(executionClock - (runningSqlTab.executionStartedAt ?? executionClock))}</span><button className="sql-cancel-button" disabled={runningSqlTab.cancelRequested} onClick={() => void cancelRunningSql()}><Square size={11}/>{runningSqlTab.cancelRequested ? "キャンセル中…" : "キャンセル"}</button></>}{!runningSqlTab && activeSqlTab?.executionDurationMs !== undefined && <span className="sql-duration"><Clock3 size={12}/>実行時間 {formatDuration(activeSqlTab.executionDurationMs)}</span>}{sqlSelection && <span className="sql-selection-status">選択 {sqlSelection.fromLine}:{sqlSelection.fromColumn}–{sqlSelection.toLine}:{sqlSelection.toColumn} · {sqlSelection.to - sqlSelection.from}文字</span>}<span className="sql-editor-hint">コメント切替 <kbd>⌘/</kbd> · 候補 <kbd>⌃Space</kbd></span></div><SqlEditor engine={active?.engine} ref={sqlEditorRef} value={sql} onChange={setSql} onRun={(from, to) => { if (!runningSqlTab) void runSql(from, to); }} getCompletions={getSqlCompletions} onSelectionChange={setSqlSelection}/><div className="resize-handle row-resize-handle" role="separator" aria-label="SQLエディタの高さを変更" aria-orientation="horizontal" tabIndex={0} onPointerDown={beginVerticalResize} onKeyDown={(event) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); setSqlEditorHeight(clamp(sqlEditorHeight + (event.key === "ArrowDown" ? 10 : -10), 80, Math.max(120, window.innerHeight - 220))); }} onDoubleClick={() => setSqlEditorHeight(DEFAULT_SQL_EDITOR_HEIGHT)}/><DataGrid key={`sql:${active?.id}:${activeSqlTab?.id}`} layoutKey={`sql:${active?.id}:${activeSqlTab?.id}`} page={sqlPage} cachedPageSize={SQL_RESULT_PAGE_SIZE} offset={sqlResultOffset} onPrevious={() => patchActiveSqlTab({resultOffset: Math.max(0, sqlResultOffset - SQL_RESULT_PAGE_SIZE)})} onNext={() => patchActiveSqlTab({resultOffset: sqlResultOffset + SQL_RESULT_PAGE_SIZE})} loading={Boolean(activeSqlTab?.running)} onQuickFilter={() => undefined} onExport={sqlPage ? (format, displayedPage) => exportPage(displayedPage, connectionQueries.find((query) => query.id === selectedQueryId)?.name ?? activeSqlTab?.title ?? "query-results", format) : undefined}/></div> : activeTab ? <div className="table-workspace">
         <nav className="table-view-tabs" aria-label="テーブル表示"><button className={activeTab.view === "content" ? "active" : ""} onClick={() => void selectTableView("content")}>内容</button><button className={activeTab.view === "structure" ? "active" : ""} onClick={() => void selectTableView("structure")}>構造</button><button className={activeTab.view === "ddl" ? "active" : ""} onClick={() => void selectTableView("ddl")}>DDL</button></nav>
-        {activeTab.view === "content" ? <><FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/><DataGrid page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} inserts={activeTab.inserts} onInsertsChange={(inserts) => patchTab(activeTab.id, {inserts})} deletedRows={activeTab.deletedRows} onDeletedRowsChange={(deletedRows) => patchTab(activeTab.id, {deletedRows})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onOpenForeignTable={openForeignTable} onFollowForeignKey={followForeignKey} onExport={activeTab.page ? (format) => exportPage(activeTab.page!, `${activeTab.table.schema}.${activeTab.table.name}`, format) : undefined} onApplyChanges={active?.readOnly ? undefined : applyTableChanges}/></> : activeTab.view === "structure" ? <div className="structure-view"><table><thead><tr><th>カラム</th><th>データ型</th><th>NULL</th><th>キー</th><th>参照先</th></tr></thead><tbody>{activeTab.columns.map((column) => <tr key={column.name}><td>{column.name}</td><td><code>{column.dataType}</code></td><td>{column.nullable ? "YES" : "NO"}</td><td>{column.primaryKey ? "PRIMARY KEY" : column.foreignKey ? "FOREIGN KEY" : ""}</td><td>{column.foreignKey ? `${column.foreignKey.schema}.${column.foreignKey.table}.${column.foreignKey.column}` : ""}</td></tr>)}</tbody></table></div> : <div className="ddl-view"><div className="ddl-toolbar"><span>{activeTab.table.schema}.{activeTab.table.name}</span><button disabled={!activeTab.ddl} onClick={() => activeTab.ddl && void navigator.clipboard.writeText(activeTab.ddl)}><Copy size={13}/>コピー</button></div><pre><code>{activeTab.ddl ?? (loading ? "DDLを取得中…" : "DDLを取得できませんでした")}</code></pre></div>}
+        {activeTab.view === "content" ? <><FilterBuilder root={activeTab.filter} columns={activeTab.columns} saved={tableSavedFilters.filter((item) => item.name !== "__last__")} loading={loading} focusRequest={filterFocusRequest} onChange={(filter) => patchTab(activeTab.id, {filter})} onApply={() => void applyFilter()} onClear={() => { const next = emptyFilter(); patchTab(activeTab.id, {filter: next}); void applyFilter(next); }} onSave={saveCurrentFilter} onLoad={(item) => { patchTab(activeTab.id, {filter: item.root}); void applyFilter(item.root); }} onDeleteSaved={deleteSavedFilter}/><DataGrid key={`table:${active?.id}:${activeTab.id}`} layoutKey={`table:${active?.id}:${activeTab.id}`} page={activeTab.page} columns={activeTab.columns} loading={loading} offset={activeTab.offset} drafts={activeTab.drafts} onDraftsChange={(drafts) => patchTab(activeTab.id, {drafts})} inserts={activeTab.inserts} onInsertsChange={(inserts) => patchTab(activeTab.id, {inserts})} deletedRows={activeTab.deletedRows} onDeletedRowsChange={(deletedRows) => patchTab(activeTab.id, {deletedRows})} sortRules={activeTab.sorts} onSortChange={(sorts) => void applySort(sorts)} onPrevious={() => void applyFilter(activeTab.appliedFilter, Math.max(0, activeTab.offset - 100))} onNext={() => void applyFilter(activeTab.appliedFilter, activeTab.offset + 100)} onQuickFilter={quickFilter} onOpenForeignTable={openForeignTable} onFollowForeignKey={followForeignKey} onExport={activeTab.page ? (format, displayedPage) => exportPage(displayedPage, `${activeTab.table.schema}.${activeTab.table.name}`, format) : undefined} onApplyChanges={active?.readOnly ? undefined : applyTableChanges}/></> : activeTab.view === "structure" ? <div className="structure-view"><table><thead><tr><th><button className="structure-sort-button" title="カラム名のソート: 降順 → 昇順 → 元の順番" onClick={() => setColumnNameSort(nextSort(columnNameSort))}>カラム {columnNameSort === "desc" ? <ArrowDown size={12}/> : columnNameSort === "asc" ? <ArrowUp size={12}/> : <ArrowUpDown size={12}/>}</button></th><th>データ型</th><th>NULL</th><th>キー</th><th>参照先</th></tr></thead><tbody>{sortByName(activeTab.columns, columnNameSort).map((column) => <tr key={column.name}><td>{column.name}</td><td><code>{column.dataType}</code></td><td>{column.nullable ? "YES" : "NO"}</td><td>{column.primaryKey ? "PRIMARY KEY" : column.foreignKey ? "FOREIGN KEY" : ""}</td><td>{column.foreignKey ? `${column.foreignKey.schema}.${column.foreignKey.table}.${column.foreignKey.column}` : ""}</td></tr>)}</tbody></table></div> : <div className="ddl-view"><div className="ddl-toolbar"><span>{activeTab.table.schema}.{activeTab.table.name}</span><button disabled={!activeTab.ddl} onClick={() => activeTab.ddl && void navigator.clipboard.writeText(activeTab.ddl)}><Copy size={13}/>コピー</button></div><pre><code>{activeTab.ddl ?? (loading ? "DDLを取得中…" : "DDLを取得できませんでした")}</code></pre></div>}
       </div> : <div className="empty-state"><Table2 size={36}/><p>左側からテーブルを選択してください</p></div>}
     </main>
     {queryContextMenu && <div className="query-context-menu" role="menu" aria-label="Queriesの操作" style={{left: queryContextMenu.x, top: queryContextMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
@@ -940,18 +940,20 @@ export default function App() {
       {!queryContextMenu.queryId && queryContextMenu.folderId && <><button role="menuitem" onClick={() => { renameQueryFolder(queryContextMenu.folderId); setQueryContextMenu(undefined); }}><Pencil size={14}/>名前を変更</button><button className="danger" role="menuitem" onClick={() => deleteQueryFolder(queryContextMenu.folderId)}><Trash2 size={14}/>削除</button></>}
     </div>}
     {tableContextMenu && <div className="query-context-menu table-context-menu" role="menu" aria-label="データベースオブジェクトの操作" style={{left: tableContextMenu.x, top: tableContextMenu.y}} onPointerDown={(event) => event.stopPropagation()}>
+      <button role="menuitem" disabled={!connected || !schemas.length} onClick={() => { setErTarget({schema: tableContextMenu.table?.schema ?? tableContextMenu.schema ?? selectedTable?.schema ?? schemas[0].name, table: tableContextMenu.table?.kind === "table" ? tableContextMenu.table.name : undefined}); setTableContextMenu(undefined); }}><Network size={14}/>{tableContextMenu.table?.kind === "table" ? "関連テーブルのER図を表示" : "スキーマのER図を表示"}</button>
+      <div className="menu-separator"/>
       {tableContextMenu.table && <>
         <button role="menuitem" onClick={() => void openTableView(tableContextMenu.table!, "content")}><Table2 size={14}/>内容を開く</button>
         <button role="menuitem" onClick={() => void openTableView(tableContextMenu.table!, "structure")}><Server size={14}/>構造を開く</button>
         <button role="menuitem" onClick={() => void openTableView(tableContextMenu.table!, "ddl")}><FileCode2 size={14}/>DDLを開く</button>
         <div className="menu-separator"/>
         <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(tableContextMenu.table!.name); setStatus("テーブル名をコピーしました"); setTableContextMenu(undefined); }}><Copy size={14}/>名前をコピー</button>
-        <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(`${tableContextMenu.table!.schema}.${tableContextMenu.table!.name}`); setStatus("スキーマ付きテーブル名をコピーしました"); setTableContextMenu(undefined); }}><Copy size={14}/>スキーマ付きでコピー</button>
+        <button role="menuitem" onClick={() => { void navigator.clipboard.writeText(`${tableContextMenu.table!.schema}.${tableContextMenu.table!.name}`); setStatus(`${active?.engine === "postgres" ? "スキーマ" : "データベース"}付きテーブル名をコピーしました`); setTableContextMenu(undefined); }}><Copy size={14}/>{active?.engine === "postgres" ? "スキーマ" : "データベース"}付きでコピー</button>
         <div className="menu-separator"/>
         {tableContextMenu.table.kind === "table" && <button disabled={active?.readOnly} role="menuitem" onClick={() => { setCsvImportTable(tableContextMenu.table); setTableContextMenu(undefined); requestAnimationFrame(() => csvInputRef.current?.click()); }}><Upload size={14}/>CSVをインポート…</button>}
         <button role="menuitem" onClick={() => void exportTable(tableContextMenu.table!)}><FilePlus2 size={14}/>CSVへエクスポート</button>
         {tableContextMenu.table.kind === "materialized_view" && <button disabled={active?.readOnly} role="menuitem" onClick={() => void runTableMaintenance(tableContextMenu.table!, "refresh")}><RefreshCw size={14}/>マテリアライズドビューを更新</button>}
-        {tableContextMenu.table.kind === "table" && <button disabled={active?.readOnly} role="menuitem" onClick={() => openSqlTemplate(`Maintenance ${tableContextMenu.table!.name}`, `VACUUM (ANALYZE) ${qualifiedName(tableContextMenu.table!)};`)}><RefreshCw size={14}/>メンテナンスSQLを開く</button>}
+        {tableContextMenu.table.kind === "table" && <button disabled={active?.readOnly} role="menuitem" onClick={() => openSqlTemplate(`Maintenance ${tableContextMenu.table!.name}`, active?.engine === "postgres" ? `VACUUM (ANALYZE) ${qualifiedName(tableContextMenu.table!)};` : `ANALYZE TABLE ${qualifiedName(tableContextMenu.table!)};`)}><RefreshCw size={14}/>メンテナンスSQLを開く</button>}
         {tableContextMenu.table.kind === "table" && <button disabled={active?.readOnly} role="menuitem" onClick={() => void runTableMaintenance(tableContextMenu.table!, "truncate")}><Trash2 size={14}/>TRUNCATE…</button>}
         <button className="danger" disabled={active?.readOnly} role="menuitem" onClick={() => void runTableMaintenance(tableContextMenu.table!, "drop")}><Trash2 size={14}/>削除…</button>
         <div className="menu-separator"/>
@@ -959,12 +961,13 @@ export default function App() {
       <div className="menu-label">NEW</div>
       <button role="menuitem" onClick={() => createObjectTemplate("table", tableContextMenu.schema)}><Table2 size={14}/>新しいテーブル</button>
       <button role="menuitem" onClick={() => createObjectTemplate("view", tableContextMenu.schema)}><Table2 size={14}/>新しいビュー</button>
-      <button role="menuitem" onClick={() => createObjectTemplate("materialized_view", tableContextMenu.schema)}><Table2 size={14}/>新しいマテリアライズドビュー</button>
+      {active?.engine === "postgres" && <button role="menuitem" onClick={() => createObjectTemplate("materialized_view", tableContextMenu.schema)}><Table2 size={14}/>新しいマテリアライズドビュー</button>}
       <button role="menuitem" onClick={() => createObjectTemplate("function", tableContextMenu.schema)}><FileCode2 size={14}/>新しい関数</button>
       <button role="menuitem" onClick={() => createObjectTemplate("procedure", tableContextMenu.schema)}><FileCode2 size={14}/>新しいプロシージャ</button>
-      <button role="menuitem" onClick={() => createObjectTemplate("schema")}><FolderPlus size={14}/>新しいスキーマ</button>
+      <button role="menuitem" onClick={() => createObjectTemplate("schema")}><FolderPlus size={14}/>{active?.engine === "postgres" ? "新しいスキーマ" : "新しいデータベース"}</button>
     </div>}
     <input ref={csvInputRef} className="visually-hidden-file-input" type="file" accept=".csv,text/csv" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importCsv(file); }}/>
+    {erTarget && connected && active && <ErDiagram key={active.id} profileId={active.id} connectionName={active.name} schemas={schemas} initialSchema={erTarget.schema} initialTable={erTarget.table} onClose={() => setErTarget(undefined)}/>}
     {dialog.open && <ConnectionDialog initial={dialog.profile} onClose={() => setDialog({open: false})} onSave={saveProfile}/>} 
     {textDialog && <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setTextDialog(undefined); }}>
       <section className="dialog text-input-dialog" role="dialog" aria-modal="true" aria-labelledby="text-dialog-title">

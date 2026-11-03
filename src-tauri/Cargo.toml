@@ -1,7 +1,7 @@
 [package]
 name = "my-postico"
-version = "0.1.1"
-description = "A focused PostgreSQL desktop client"
+version = "0.2.0"
+description = "A focused PostgreSQL, MySQL and MariaDB desktop client"
 authors = ["My Postico"]
 edition = "2021"
 
@@ -11,7 +11,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-png = "0.17"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -19,6 +18,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 postgres = { version = "0.19", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
 postgres-native-tls = "0.5"
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "native-tls-tls"] }
+tokio = { version = "1", features = ["time"] }
 native-tls = "0.2"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 keyring = { version = "3", features = ["apple-native"] }

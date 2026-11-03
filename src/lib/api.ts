@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { SchemaDiagram } from "../types";
+import type { DiagramFormat } from "./diagram";
 import type { ColumnInfo, ConnectionProfile, FilterGroup, FunctionInfo, ProfileSecrets, QueryFolder, QueryPage, SavedFilter, SavedQuery, SchemaInfo, SortRule, TableChangeResult, TableChanges, TableInfo } from "../types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
 export async function listProfiles(): Promise<ConnectionProfile[]> {
-  if (!isTauri()) return JSON.parse(localStorage.getItem("demo-profiles") ?? "[]");
+  if (!isTauri()) return (JSON.parse(localStorage.getItem("demo-profiles") ?? "[]") as ConnectionProfile[]).map((profile) => ({...profile, engine: profile.engine ?? "postgres"}));
   return invoke("list_profiles");
 }
 
@@ -34,6 +36,16 @@ export const listSchemas = (profileId: string) => invoke<SchemaInfo[]>("list_sch
 export const listTables = (profileId: string, schema: string) => invoke<TableInfo[]>("list_tables", { profileId, schema });
 export const listFunctions = (profileId: string, schema: string) => invoke<FunctionInfo[]>("list_functions", { profileId, schema });
 export const getColumns = (profileId: string, schema: string, table: string) => invoke<ColumnInfo[]>("get_columns", { profileId, schema, table });
+export const getSchemaDiagram = (profileId: string, schema: string) => invoke<SchemaDiagram>("get_schema_diagram", {profileId, schema});
+
+export async function exportDiagram(fileName: string, format: DiagramFormat, contents: string): Promise<string> {
+  if (isTauri()) return invoke<string>("export_diagram", {fileName, format, contents});
+  const mime = {png: "image/png", svg: "image/svg+xml", mmd: "text/plain", drawio: "application/xml"}[format];
+  const anchor = document.createElement("a");
+  anchor.href = `data:${mime};${format === "png" ? "base64," + contents : "charset=utf-8," + encodeURIComponent(contents)}`;
+  anchor.download = fileName; anchor.click();
+  return fileName;
+}
 export const getTableDdl = (profileId: string, schema: string, table: string) => invoke<string>("get_table_ddl", { profileId, schema, table });
 export const getFunctionDdl = (profileId: string, schema: string, name: string, identityArguments: string) => invoke<string>("get_function_ddl", { profileId, schema, name, arguments: identityArguments });
 export const queryTable = (profileId: string, schema: string, table: string, filter: FilterGroup, sorts: SortRule[], offset: number) =>

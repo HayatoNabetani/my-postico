@@ -2015,3 +2015,27 @@ body,
 .saved-connections-home .connection-main > span {
   min-width: 0;
 }
+
+/* Keep explicit column widths independent of cell contents. */
+.resizable-data-grid { table-layout: fixed; min-width: 0; }
+.resizable-data-grid th, .resizable-data-grid td { max-width: none; }
+.resizable-data-grid th:not(.row-number):not(.row-actions) { padding-right: 16px; cursor: pointer; }
+.resizable-data-grid .column-heading { overflow: hidden; }
+.resizable-data-grid .column-heading > span:first-child { overflow: hidden; text-overflow: ellipsis; cursor: grab; }
+.resizable-data-grid .column-badges { flex-shrink: 0; }
+.grid-column-resizer { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; }
+.grid-column-resizer:hover, .grid-column-resizer:focus { background: #ae8cff70; outline: none; }
+.resizing-grid-column, .resizing-grid-column * { cursor: col-resize !important; user-select: none !important; }
+.structure-sort-button { display: inline-flex; align-items: center; gap: 6px; padding: 0; }
+.object-search .list-sort-button { flex-shrink: 0; }
+.object-search input { text-transform: none; }
+
+.resizable-data-grid .column-heading > span:first-child { user-select: none; touch-action: none; }
+.reordering-grid-column, .reordering-grid-column * { cursor: grabbing !important; user-select: none !important; }
+
+/* WKWebView needs the prefixed property to stop native text selection. */
+.resizable-data-grid th { -webkit-user-select: none; user-select: none; touch-action: none; }
+.resizable-data-grid th * { -webkit-user-select: none; user-select: none; }
+.reordering-grid-column, .reordering-grid-column *, .resizing-grid-column, .resizing-grid-column * { -webkit-user-select: none !important; }
+.resizable-data-grid th.dragging-grid-column { opacity: .65; }
+.resizable-data-grid th.grid-column-drop-target { box-shadow: inset 3px 0 var(--accent); }

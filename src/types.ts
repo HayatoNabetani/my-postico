@@ -1,4 +1,5 @@
 export type Environment = "Local" | "Development" | "Staging" | "Production";
+export type DatabaseEngine = "postgres" | "mysql" | "mariadb";
 export type SshAuthMethod = "password" | "privateKey" | "agent";
 
 export interface SshConfig {
@@ -12,6 +13,7 @@ export interface SshConfig {
 }
 
 export interface ConnectionProfile {
+  engine: DatabaseEngine;
   id: string;
   name: string;
   host: string;
@@ -46,6 +48,28 @@ export interface ColumnInfo {
   nullable: boolean;
   primaryKey: boolean;
   foreignKey?: ForeignKeyInfo;
+}
+
+export interface DiagramTable {
+  schema: string;
+  name: string;
+  columns: ColumnInfo[];
+  external: boolean;
+}
+
+export interface DiagramForeignKey {
+  name: string;
+  sourceSchema: string;
+  sourceTable: string;
+  targetSchema: string;
+  targetTable: string;
+  columns: string[];
+  targetColumns: string[];
+}
+
+export interface SchemaDiagram {
+  tables: DiagramTable[];
+  foreignKeys: DiagramForeignKey[];
 }
 
 export type FilterOperator =

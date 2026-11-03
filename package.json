@@ -1,13 +1,16 @@
 {
   "name": "my-postico",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
+    "setup:signing": "bash scripts/setup-macos-signing.sh",
+    "build:app": "tauri build --bundles app",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

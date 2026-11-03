@@ -1,0 +1,44 @@
+.er-dialog { width: calc(100vw - 32px); max-width: 1600px; height: calc(100vh - 40px); max-height: 1000px; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); overflow: hidden; box-shadow: 0 24px 64px #0008; }
+.er-dialog[open] { display: flex; flex-direction: column; }
+.er-dialog::backdrop { background: #0008; }
+.er-dialog button, .er-dialog select, .er-search { font: inherit; font-size: 12px; color: inherit; background: var(--panel2, #20232a); border: 1px solid var(--line); border-radius: 6px; min-height: 28px; padding: 4px 8px; }
+.er-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
+.er-dialog button:hover:not(:disabled) { background: var(--panel2, #30343d); filter: brightness(1.15); }
+.er-dialog button:disabled { opacity: .4; cursor: default; }
+.er-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.er-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); gap: 16px; }
+.er-header>div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.er-header h2 { font-size: 17px; white-space: nowrap; margin: 0; }
+.er-header span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.er-header .er-readonly { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.er-toolbar { padding: 12px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.er-toolbar label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.er-toolbar label>select { max-width: 200px; }
+.er-export { display: flex; gap: 8px; margin-left: auto; }
+.er-export .er-primary { background: var(--accent2); color: white; border-color: var(--accent); }
+.er-body { display: flex; flex: 1; min-height: 0; }
+.er-sidebar { width: 220px; flex-shrink: 0; border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; min-height: 0; }
+.er-table-heading { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 12px; }
+.er-table-heading span { color: var(--muted); }
+.er-search { width: 100%; }
+.er-selection { display: flex; gap: 8px; margin: 8px 0; }
+.er-selection button { flex: 1; font-size: 11px; }
+.er-table-list { overflow-y: auto; flex: 1; min-height: 0; }
+.er-table-row { display: flex; align-items: center; min-height: 32px; border-radius: 6px; gap: 4px; }
+.er-table-row:hover { background: var(--panel2); }
+.er-table-row label { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 12px; cursor: pointer; }
+.er-table-row label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.er-dialog input[type=checkbox] { accent-color: var(--accent); }
+.er-table-row button { padding: 4px; background: transparent; border-color: transparent; }
+.er-hint { font-size: 11px; line-height: 1.6; color: var(--muted); margin: 12px 0 0; }
+.er-canvas-section { flex: 1; min-width: 0; position: relative; background: #f5f5f7; }
+.er-canvas { position: absolute; inset: 0; overflow: auto; padding: 16px; cursor: grab; touch-action: none; }
+.er-canvas:active { cursor: grabbing; }
+.er-svg-size { position: relative; user-select: none; overflow: hidden; }
+.er-empty { height: 100%; min-height: 120px; display: grid; place-content: center; text-align: center; color: #6e6e73; font-size: 13px; }
+.er-zoom { position: absolute; right: 16px; bottom: 16px; display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: 0 1px 8px #0002; }
+.er-zoom button { min-width: 28px; }
+.er-footer { display: flex; gap: 16px; justify-content: space-between; padding: 8px 16px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); flex-wrap: wrap; }
+.er-message { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--green); font-size: 12px; overflow-wrap: anywhere; max-height: 80px; overflow-y: auto; }
+.er-error { color: var(--red); }
+@media (max-width: 1000px) { .er-sidebar { width: 190px; } .er-export { margin-left: 0; } .er-toolbar { gap: 6px; } .er-header .er-readonly { display: none; } }

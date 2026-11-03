@@ -1,6 +1,10 @@
 mod db;
+mod diagram;
 mod filters;
 mod models;
+mod mysql_db;
+mod mysql_filters;
+mod postgres_db;
 mod ssh;
 mod store;
 
@@ -82,12 +86,12 @@ fn reconnect(connections: &mut HashMap<String, ConnectedDb>, profile_id: &str) -
 
 fn connection_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
-    message.contains("connection closed") || message.contains("closed connection") || message.contains("broken pipe") || message.contains("connection reset") || message.contains("unexpected eof")
+    message.contains("mysql transport error") || message.contains("connection closed") || message.contains("closed connection") || message.contains("broken pipe") || message.contains("connection reset") || message.contains("unexpected eof")
 }
 
 fn with_connection<T>(state: &AppState, profile_id: &str, mut action: impl FnMut(&mut ConnectedDb) -> Result<T, String>) -> Result<T, String> {
     let mut connections = state.connections.lock().map_err(|_| "接続状態をロックできません")?;
-    let closed = connections.get(profile_id).ok_or("データベースへ接続してください")?.client.is_closed();
+    let closed = connections.get(profile_id).ok_or("データベースへ接続してください")?.is_closed();
     if closed { reconnect(&mut connections, profile_id)?; }
     let result = action(connections.get_mut(profile_id).ok_or("データベースへ再接続できません")?);
     if result.as_ref().err().is_some_and(|message| connection_error(message)) {
@@ -99,67 +103,75 @@ fn with_connection<T>(state: &AppState, profile_id: &str, mut action: impl FnMut
 
 fn with_connection_once<T>(state: &AppState, profile_id: &str, action: impl FnOnce(&mut ConnectedDb) -> Result<T, String>) -> Result<T, String> {
     let mut connections = state.connections.lock().map_err(|_| "接続状態をロックできません")?;
-    let closed = connections.get(profile_id).ok_or("データベースへ接続してください")?.client.is_closed();
+    let closed = connections.get(profile_id).ok_or("データベースへ接続してください")?.is_closed();
     if closed { reconnect(&mut connections, profile_id)?; }
     action(connections.get_mut(profile_id).ok_or("データベースへ再接続できません")?)
 }
 
 blocking_command! {
 fn list_schemas(state: tauri::State<AppState>, profile_id: String) -> Result<Vec<SchemaInfo>, String> {
-    with_connection(&state, &profile_id, |db| db::schemas(&mut db.client))
+    with_connection(&state, &profile_id, |db| db::schemas(db))
 }
 }
 
 blocking_command! {
 fn list_tables(state: tauri::State<AppState>, profile_id: String, schema: String) -> Result<Vec<TableInfo>, String> {
-    with_connection(&state, &profile_id, |db| db::tables(&mut db.client, &schema))
+    with_connection(&state, &profile_id, |db| db::tables(db, &schema))
 }
 }
 
 blocking_command! {
 fn list_functions(state: tauri::State<AppState>, profile_id: String, schema: String) -> Result<Vec<FunctionInfo>, String> {
-    with_connection(&state, &profile_id, |db| db::functions(&mut db.client, &schema))
+    with_connection(&state, &profile_id, |db| db::functions(db, &schema))
 }
 }
 
 blocking_command! {
 fn get_function_ddl(state: tauri::State<AppState>, profile_id: String, schema: String, name: String, arguments: String) -> Result<String, String> {
-    with_connection(&state, &profile_id, |db| db::function_ddl(&mut db.client, &schema, &name, &arguments))
+    with_connection(&state, &profile_id, |db| db::function_ddl(db, &schema, &name, &arguments))
 }
 }
 
 blocking_command! {
 fn get_columns(state: tauri::State<AppState>, profile_id: String, schema: String, table: String) -> Result<Vec<ColumnInfo>, String> {
-    with_connection(&state, &profile_id, |db| db::columns(&mut db.client, &schema, &table))
+    with_connection(&state, &profile_id, |db| db::columns(db, &schema, &table))
+}
+}
+
+blocking_command! {
+fn get_schema_diagram(state: tauri::State<AppState>, profile_id: String, schema: String) -> Result<diagram::SchemaDiagram, String> {
+    with_connection(&state, &profile_id, |db| diagram::load(db, &schema))
 }
 }
 
 blocking_command! {
 fn get_table_ddl(state: tauri::State<AppState>, profile_id: String, schema: String, table: String) -> Result<String, String> {
-    with_connection(&state, &profile_id, |db| db::table_ddl(&mut db.client, &schema, &table))
+    with_connection(&state, &profile_id, |db| db::table_ddl(db, &schema, &table))
 }
 }
 
 blocking_command! {
 fn query_table(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, filter: FilterNode, sorts: Vec<SortRule>, offset: u32) -> Result<QueryPage, String> {
-    with_connection(&state, &profile_id, |db| db::query_table(&mut db.client, &schema, &table, &filter, &sorts, offset))
+    with_connection(&state, &profile_id, |db| db::query_table(db, &schema, &table, &filter, &sorts, offset))
 }
 }
 
 blocking_command! {
 fn apply_table_changes(state: tauri::State<AppState>, profile_id: String, schema: String, table: String, changes: TableChanges) -> Result<TableChangeResult, String> {
-    with_connection_once(&state, &profile_id, |db| db::apply_table_changes(&mut db.client, &schema, &table, changes, db.read_only))
+    with_connection_once(&state, &profile_id, |db| db::apply_table_changes(db, &schema, &table, changes))
 }
 }
 
 blocking_command! {
 fn execute_sql(state: tauri::State<AppState>, profile_id: String, sql: String) -> Result<QueryPage, String> {
     let mut connections = state.connections.lock().map_err(|_| "接続状態をロックできません")?;
-    let closed = connections.get(&profile_id).ok_or("データベースへ接続してください")?.client.is_closed();
+    let closed = connections.get(&profile_id).ok_or("データベースへ接続してください")?.is_closed();
     if closed { reconnect(&mut connections, &profile_id)?; }
     let database = connections.get_mut(&profile_id).ok_or("データベースへ再接続できません")?;
-    state.query_cancellations.lock().map_err(|_| "キャンセル状態をロックできません")?.insert(profile_id.clone(), database.cancel_request());
-    let result = db::execute_sql(&mut database.client, &sql, database.read_only);
+    let cancellation = database.cancel_request();
+    state.query_cancellations.lock().map_err(|_| "キャンセル状態をロックできません")?.insert(profile_id.clone(), cancellation.clone());
+    let result = db::execute_sql(database, &sql);
+    cancellation.finish();
     state.query_cancellations.lock().map_err(|_| "キャンセル状態をロックできません")?.remove(&profile_id);
     result
 }
@@ -174,7 +186,7 @@ fn cancel_sql(state: tauri::State<AppState>, profile_id: String) -> Result<(), S
 
 blocking_command! {
 fn keep_connection_alive(state: tauri::State<AppState>, profile_id: String) -> Result<(), String> {
-    with_connection(&state, &profile_id, |db| db.client.simple_query("SELECT 1").map(|_| ()).map_err(|error| error.to_string()))
+    with_connection(&state, &profile_id, |db| db.keep_alive())
 }
 }
 
@@ -189,8 +201,34 @@ async fn export_results(file_name: String, format: String, contents: String) -> 
 
 
 fn save_export(directory: &std::path::Path, file_name: &str, format: &str, contents: &str) -> Result<std::path::PathBuf, String> {
-    use std::{fs::OpenOptions, io::{ErrorKind, Write}, path::Path};
     if !matches!(format, "csv" | "json") { return Err("未対応のエクスポート形式です".into()); }
+    save_export_bytes(directory, file_name, format, contents.as_bytes())
+}
+
+#[tauri::command]
+async fn export_diagram(file_name: String, format: String, contents: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let bytes = diagram_export_bytes(&format, &contents)?;
+        let downloads = directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(std::path::Path::to_path_buf)).ok_or("ダウンロードフォルダを取得できません")?;
+        Ok(save_export_bytes(&downloads, &file_name, &format, &bytes)?.to_string_lossy().into_owned())
+    }).await.map_err(|error| format!("保存処理に失敗しました: {error}"))?
+}
+
+fn diagram_export_bytes(format: &str, contents: &str) -> Result<Vec<u8>, String> {
+    match format {
+        "svg" | "mmd" | "drawio" => Ok(contents.as_bytes().to_vec()),
+        "png" => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(contents).map_err(|_| "PNGデータが不正です")?;
+            if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return Err("PNGデータが不正です".into()); }
+            Ok(bytes)
+        }
+        _ => Err("未対応のER図形式です".into()),
+    }
+}
+
+fn save_export_bytes(directory: &std::path::Path, file_name: &str, format: &str, contents: &[u8]) -> Result<std::path::PathBuf, String> {
+    use std::{fs::OpenOptions, io::{ErrorKind, Write}, path::Path};
     let name = Path::new(file_name);
     if name.file_name().and_then(|v| v.to_str()) != Some(file_name)
         || name.extension().and_then(|v| v.to_str()) != Some(format) {
@@ -208,7 +246,7 @@ fn save_export(directory: &std::path::Path, file_name: &str, format: &str, conte
         match options.open(&path) {
             Ok(mut file) => {
                 if format == "csv" { file.write_all("\u{feff}".as_bytes()).map_err(|e| e.to_string())?; }
-                file.write_all(contents.as_bytes()).map_err(|e| format!("エクスポートに失敗しました: {e}"))?;
+                file.write_all(contents).map_err(|e| format!("エクスポートに失敗しました: {e}"))?;
                 return Ok(path);
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
@@ -223,7 +261,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![list_profiles, save_profile, delete_profile, test_connection, connect_profile, disconnect_profile, list_schemas, list_tables, list_functions, get_columns, get_table_ddl, get_function_ddl, query_table, apply_table_changes, execute_sql, cancel_sql, keep_connection_alive, export_results])
+        .invoke_handler(tauri::generate_handler![list_profiles, save_profile, delete_profile, test_connection, connect_profile, disconnect_profile, list_schemas, list_tables, list_functions, get_columns, get_schema_diagram, get_table_ddl, get_function_ddl, query_table, apply_table_changes, execute_sql, cancel_sql, keep_connection_alive, export_results, export_diagram])
         .run(tauri::generate_context!())
         .expect("failed to run My Postico");
 }
@@ -237,6 +275,30 @@ mod tests {
         for name in ["../x.json", "/tmp/x.json", "x.html", ".", ".."] {
             assert!(super::save_export(std::path::Path::new("/does-not-exist"), name, "json", "{}").is_err());
         }
+    }
+
+    #[test]
+    fn diagram_export_validates_binary_and_preserves_safe_names() {
+        assert!(super::diagram_export_bytes("html", "anything").is_err());
+        assert!(super::diagram_export_bytes("png", "not base64").is_err());
+        assert!(super::diagram_export_bytes("png", "dGV4dA==").is_err());
+        let png = super::diagram_export_bytes("png", "iVBORw0KGgo=").unwrap();
+        let dir = std::env::temp_dir().join(format!("my-postico-diagram-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        for name in ["../x.png", "/tmp/x.png", "x.svg"] {
+            assert!(super::save_export_bytes(&dir, name, "png", &png).is_err());
+        }
+        for format in ["png", "svg", "mmd", "drawio"] {
+            let content = if format == "png" { png.clone() } else { super::diagram_export_bytes(format, "日本語<&").unwrap() };
+            let name = format!("diagram.{format}");
+            let first = super::save_export_bytes(&dir, &name, format, &content).unwrap();
+            let second = super::save_export_bytes(&dir, &name, format, &content).unwrap();
+            assert_ne!(first, second);
+            assert_eq!(std::fs::read(first).unwrap(), content);
+        }
+        let csv = super::save_export(&dir, "result.csv", "csv", "id\n1").unwrap();
+        assert_eq!(std::fs::read(csv).unwrap(), "\u{feff}id\n1".as_bytes());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

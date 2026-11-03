@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { KeyRound, Server, ShieldCheck, X } from "lucide-react";
-import type { ConnectionProfile, ProfileSecrets, SshAuthMethod } from "../types";
+import type { ConnectionProfile, DatabaseEngine, ProfileSecrets, SshAuthMethod } from "../types";
+import { databaseLabels } from "../lib/dialect";
 
 const blankProfile = (): ConnectionProfile => ({
-  id: crypto.randomUUID(), name: "New connection", host: "localhost", port: 5432,
+  id: crypto.randomUUID(), engine: "postgres", name: "New connection", host: "localhost", port: 5432,
   database: "postgres", username: "postgres", sslMode: "prefer", environment: "Local",
   readOnly: false,
   ssh: { enabled: false, host: "", port: 22, username: "", authMethod: "privateKey", privateKeyPath: "~/.ssh/id_ed25519" },
@@ -36,6 +37,18 @@ export function ConnectionDialog({ initial, onClose, onSave, embedded = false, f
   const sshChange = <K extends keyof ConnectionProfile["ssh"]>(key: K, value: ConnectionProfile["ssh"][K]) =>
     setProfile((current) => ({ ...current, ssh: { ...current.ssh, [key]: value } }));
 
+  function changeEngine(engine: DatabaseEngine) {
+    setProfile((current) => {
+      const wasPostgres = (current.engine ?? "postgres") === "postgres";
+      const postgres = engine === "postgres";
+      return {...current, engine,
+        port: current.port === (wasPostgres ? 5432 : 3306) ? (postgres ? 5432 : 3306) : current.port,
+        database: wasPostgres && !postgres && current.database === "postgres" ? "" : !wasPostgres && postgres && !current.database ? "postgres" : current.database,
+        username: current.username === (wasPostgres ? "postgres" : "root") ? (postgres ? "postgres" : "root") : current.username,
+      };
+    });
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setSaving(true); setError("");
     try {
@@ -54,12 +67,13 @@ export function ConnectionDialog({ initial, onClose, onSave, embedded = false, f
       </header>
 
       <section className="form-section">
-        <h3><Server size={16}/> PostgreSQL</h3>
+        <h3><Server size={16}/> {databaseLabels[profile.engine ?? "postgres"]}</h3>
         <div className="form-grid">
+          <label className="span-2">データベース種類<select value={profile.engine ?? "postgres"} onChange={(e) => changeEngine(e.target.value as DatabaseEngine)}>{Object.entries(databaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="span-2">表示名<input ref={nameInputRef} {...typingProps} required value={profile.name} onChange={(e) => change("name", e.target.value)}/></label>
           <label>ホスト<input {...typingProps} required value={profile.host} onChange={(e) => change("host", e.target.value)}/></label>
           <label>ポート<input required type="number" value={profile.port} onChange={(e) => change("port", Number(e.target.value))}/></label>
-          <label>データベース<input {...typingProps} required value={profile.database} onChange={(e) => change("database", e.target.value)}/></label>
+          <label>データベース<input {...typingProps} required={(profile.engine ?? "postgres") === "postgres"} placeholder={profile.engine !== "postgres" ? "省略すると一覧から選択" : undefined} value={profile.database} onChange={(e) => change("database", e.target.value)}/></label>
           <label>ユーザー<input {...typingProps} required value={profile.username} onChange={(e) => change("username", e.target.value)}/></label>
           <label>パスワード<input {...typingProps} type="password" placeholder={initial ? "変更しない" : "Keychainに保存"} value={secrets.dbPassword ?? ""} onChange={(e) => setSecrets({...secrets, dbPassword: e.target.value})}/></label>
           <label>SSL<select value={profile.sslMode} onChange={(e) => change("sslMode", e.target.value as ConnectionProfile["sslMode"])}><option value="disable">Disable</option><option value="prefer">Prefer</option><option value="require">Require</option><option value="verifyFull">Verify Full</option></select></label>

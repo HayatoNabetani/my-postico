@@ -1,8 +1,9 @@
 import { acceptCompletion, autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { indentWithTab, toggleLineComment } from "@codemirror/commands";
-import { PostgreSQL, sql } from "@codemirror/lang-sql";
+import { MariaSQL, MySQL, PostgreSQL, sql } from "@codemirror/lang-sql";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
+import type { DatabaseEngine } from "../types";
 import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
@@ -31,6 +32,7 @@ export interface SqlSelection {
 }
 
 interface Props {
+  engine?: DatabaseEngine;
   value: string;
   onChange: (value: string) => void;
   onRun: (from: number, to: number) => void;
@@ -49,9 +51,10 @@ const sqlHighlight = HighlightStyle.define([
   {tag: [tags.operator, tags.punctuation], color: "#9ba3af"},
 ]);
 
-export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({value, onChange, onRun, getCompletions, onSelectionChange}, forwardedRef) {
+export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({engine = "postgres", value, onChange, onRun, getCompletions, onSelectionChange}, forwardedRef) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
+  const dialectRef = useRef(new Compartment());
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const onRunRef = useRef(onRun);
@@ -86,7 +89,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({
         doc: valueRef.current,
         extensions: [
           basicSetup,
-          sql({dialect: PostgreSQL}),
+          dialectRef.current.of(sql({dialect: engine === "postgres" ? PostgreSQL : engine === "mariadb" ? MariaSQL : MySQL})),
           syntaxHighlighting(sqlHighlight),
           EditorView.theme({
             "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {backgroundColor: "#7657bd99 !important"},
@@ -139,6 +142,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, Props>(function SqlEditor({
     viewRef.current = view;
     return () => { view.destroy(); viewRef.current = undefined; };
   }, []);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({effects: dialectRef.current.reconfigure(sql({dialect: engine === "postgres" ? PostgreSQL : engine === "mariadb" ? MariaSQL : MySQL}))});
+  }, [engine]);
 
   useEffect(() => {
     const view = viewRef.current;
